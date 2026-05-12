@@ -1,0 +1,10 @@
+return {
+    _all = {
+        lua = "lua",
+    },
+    default = {
+        ROOT = { "tests/spec" },
+        pattern = "_spec",
+        verbose = true,
+    },
+}

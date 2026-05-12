@@ -1,0 +1,43 @@
+std = "lua51"
+max_line_length = 120
+codes = true
+exclude_files = {
+    "Libs/",
+    ".release/",
+    ".deliverables/",
+}
+
+ignore = {
+    "212/self",
+    "211/_.*",  -- unused variables prefixed with underscore
+    "212/_.*",  -- unused arguments prefixed with underscore
+    "213/_.*",  -- unused loop variables prefixed with underscore
+}
+
+read_globals = {
+    -- Libraries
+    "LibStub",
+
+    -- WoW API (anticipated by other DragonCore modules)
+    "CreateFrame", "C_Timer", "GetBuildInfo",
+
+    -- WoW Globals - Version detection
+    "WOW_PROJECT_ID", "WOW_PROJECT_MAINLINE",
+}
+
+-----------------------------------------------------------------------
+-- Tests
+-----------------------------------------------------------------------
+files["tests/"] = {
+    read_globals = {
+        -- Busted DSL
+        "describe", "it", "before_each", "after_each", "setup", "teardown",
+        "pending", "assert", "spy", "stub", "mock", "match",
+        -- LibStub is loaded into the global namespace by the spec bootstrap.
+        "LibStub",
+    },
+    globals = {
+        -- strmatch shim so the vendored LibStub loads under stock Lua 5.1.
+        "strmatch",
+    },
+}

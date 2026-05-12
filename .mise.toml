@@ -1,0 +1,13 @@
+[tools]
+lua = "5.1"
+
+[env]
+_.path = ["{{config_root}}/.luarocks/bin", "{{env.HOME}}/.local/share/mise/installs/lua/5.1/luarocks/bin"]
+
+[tasks.test]
+run = "busted --verbose"
+description = "Run busted test suite"
+
+[tasks.lint]
+run = "luacheck ."
+description = "Run luacheck linter"

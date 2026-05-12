@@ -1,0 +1,9 @@
+## Interface: 110207
+## Title: Lib: LibStub
+## Notes: Universal Library Stub
+## Author: Kaelten, Cladhaire, ckknight, Mikk, Ammo, Nevcairiel, joshborke
+## X-Website: http://www.wowace.com/addons/libstub/
+## X-Category: Library
+## X-License: Public Domain
+
+LibStub.lua
