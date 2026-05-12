@@ -20,7 +20,7 @@ read_globals = {
 
     -- WoW API (anticipated by other DragonCore modules)
     "CreateFrame", "C_Timer", "GetBuildInfo", "GetLocale",
-    "C_RestrictedActions",
+    "C_RestrictedActions", "C_ChatInfo",
 
     -- WoW taint-isolation surface (SecureCall)
     "securecallfunction", "geterrorhandler",

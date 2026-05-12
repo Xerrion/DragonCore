@@ -24,7 +24,7 @@ local WOW_GLOBALS = {
     "WOW_PROJECT_BURNING_CRUSADE_CLASSIC", "WOW_PROJECT_WRATH_CLASSIC",
     "WOW_PROJECT_CATACLYSM_CLASSIC", "WOW_PROJECT_MISTS_CLASSIC",
     "WOW_PROJECT_CLASSIC",
-    "C_RestrictedActions", "Enum",
+    "C_RestrictedActions", "C_ChatInfo", "Enum",
     "securecallfunction", "geterrorhandler",
 }
 
