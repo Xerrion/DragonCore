@@ -25,6 +25,7 @@ local WOW_GLOBALS = {
     "WOW_PROJECT_CATACLYSM_CLASSIC", "WOW_PROJECT_MISTS_CLASSIC",
     "WOW_PROJECT_CLASSIC",
     "C_RestrictedActions", "Enum",
+    "securecallfunction", "geterrorhandler",
 }
 
 ---Reload LibStub from source. Wipes any prior LibStub state so library

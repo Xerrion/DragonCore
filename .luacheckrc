@@ -22,6 +22,9 @@ read_globals = {
     "CreateFrame", "C_Timer", "GetBuildInfo",
     "C_RestrictedActions",
 
+    -- WoW taint-isolation surface (SecureCall)
+    "securecallfunction", "geterrorhandler",
+
     -- WoW Globals - Version detection
     "WOW_PROJECT_ID", "WOW_PROJECT_MAINLINE",
     "WOW_PROJECT_BURNING_CRUSADE_CLASSIC", "WOW_PROJECT_WRATH_CLASSIC",
