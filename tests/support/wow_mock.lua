@@ -14,6 +14,9 @@
 --                                               frameType == "Frame" and
 --                                               name == nil per ADR section F
 --                                               line 750 (taint contract).
+--   _G.GetLocale()                           -- returns the mock's current
+--                                               locale (default "enUS"); set
+--                                               per-spec via :SetLocale.
 --
 -- Virtual clock semantics (mock:AdvanceTime(sec)):
 --   * Callbacks fire in chronological order of their scheduled fireAt.
@@ -72,8 +75,10 @@ function M.new()
     self.now = 0
     self.scheduled = {}
     self.frames = {}
+    self._locale = "enUS"
     self._previousC_Timer = nil
     self._previousCreateFrame = nil
+    self._previousGetLocale = nil
     self._installed = false
     return self
 end
@@ -185,6 +190,7 @@ function Mock:Install()
     end
     self._previousC_Timer = _G.C_Timer
     self._previousCreateFrame = _G.CreateFrame
+    self._previousGetLocale = _G.GetLocale
     local mock = self
 
     _G.C_Timer = {
@@ -239,17 +245,35 @@ function Mock:Install()
         return frame
     end
 
+    _G.GetLocale = function()
+        return mock._locale or "enUS"
+    end
+
     self._installed = true
 end
 
----Restore the previous `_G.C_Timer` and `_G.CreateFrame`. Safe when not installed.
+---Restore the previous `_G.C_Timer`, `_G.CreateFrame`, and `_G.GetLocale`.
+---Safe when not installed.
 function Mock:Uninstall()
     if not self._installed then return end
     _G.C_Timer = self._previousC_Timer
     _G.CreateFrame = self._previousCreateFrame
+    _G.GetLocale = self._previousGetLocale
     self._previousC_Timer = nil
     self._previousCreateFrame = nil
+    self._previousGetLocale = nil
     self._installed = false
+end
+
+---Set the value `_G.GetLocale()` returns for this mock. Defaults to `"enUS"`
+---on :Install; specs that exercise deDE / ruRU / esES paths call this before
+---:Register or :Get. Safe to call before or after :Install.
+---@param locale string
+function Mock:SetLocale(locale)
+    if type(locale) ~= "string" or locale == "" then
+        error("wow_mock:SetLocale: locale must be a non-empty string", 2)
+    end
+    self._locale = locale
 end
 
 -------------------------------------------------------------------------------

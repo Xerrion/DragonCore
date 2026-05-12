@@ -19,7 +19,7 @@ local M = {}
 -- harness can wipe them in one place between tests. Keep in sync with the
 -- `read_globals` list in .luacheckrc.
 local WOW_GLOBALS = {
-    "CreateFrame", "C_Timer", "GetBuildInfo",
+    "CreateFrame", "C_Timer", "GetBuildInfo", "GetLocale",
     "WOW_PROJECT_ID", "WOW_PROJECT_MAINLINE",
     "WOW_PROJECT_BURNING_CRUSADE_CLASSIC", "WOW_PROJECT_WRATH_CLASSIC",
     "WOW_PROJECT_CATACLYSM_CLASSIC", "WOW_PROJECT_MISTS_CLASSIC",

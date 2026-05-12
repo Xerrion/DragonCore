@@ -19,7 +19,7 @@ read_globals = {
     "LibStub",
 
     -- WoW API (anticipated by other DragonCore modules)
-    "CreateFrame", "C_Timer", "GetBuildInfo",
+    "CreateFrame", "C_Timer", "GetBuildInfo", "GetLocale",
     "C_RestrictedActions",
 
     -- WoW taint-isolation surface (SecureCall)
