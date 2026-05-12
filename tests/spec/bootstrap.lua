@@ -25,6 +25,7 @@ local WOW_GLOBALS = {
     "WOW_PROJECT_CATACLYSM_CLASSIC", "WOW_PROJECT_MISTS_CLASSIC",
     "WOW_PROJECT_CLASSIC",
     "C_RestrictedActions", "C_ChatInfo", "Enum",
+    "UnitName", "GetRealmName", "UnitFactionGroup", "UnitClass", "UnitRace",
     "securecallfunction", "geterrorhandler",
 }
 

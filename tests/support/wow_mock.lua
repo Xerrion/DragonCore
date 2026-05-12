@@ -100,11 +100,24 @@ function M.new()
     self._sentMessages = {}
     self._sendFails = false
     self._restrictionState = nil
+    self._playerIdentity = {
+        name = "TestChar",
+        realm = "TestRealm",
+        faction = "Horde",
+        class = { "Warrior", "WARRIOR", 1 },
+        race = { "Tauren", "Tauren", 6 },
+    }
+    self._trackedSavedVars = {}
     self._previousC_Timer = nil
     self._previousCreateFrame = nil
     self._previousGetLocale = nil
     self._previousC_ChatInfo = nil
     self._previousC_RestrictedActions = nil
+    self._previousUnitName = nil
+    self._previousGetRealmName = nil
+    self._previousUnitFactionGroup = nil
+    self._previousUnitClass = nil
+    self._previousUnitRace = nil
     self._installed = false
     return self
 end
@@ -218,6 +231,11 @@ function Mock:Install()
     self._previousCreateFrame = _G.CreateFrame
     self._previousGetLocale = _G.GetLocale
     self._previousC_ChatInfo = _G.C_ChatInfo
+    self._previousUnitName = _G.UnitName
+    self._previousGetRealmName = _G.GetRealmName
+    self._previousUnitFactionGroup = _G.UnitFactionGroup
+    self._previousUnitClass = _G.UnitClass
+    self._previousUnitRace = _G.UnitRace
     local mock = self
 
     _G.C_Timer = {
@@ -303,6 +321,27 @@ function Mock:Install()
         end,
     }
 
+    -- Player-identity stubs (design note section 8.1). The closures read
+    -- self._playerIdentity so SetPlayerIdentity is reflected on the next
+    -- call without re-installing the globals.
+    _G.UnitName = function(_unit)
+        return mock._playerIdentity.name, ""
+    end
+    _G.GetRealmName = function()
+        return mock._playerIdentity.realm
+    end
+    _G.UnitFactionGroup = function(_unit)
+        return mock._playerIdentity.faction
+    end
+    _G.UnitClass = function(_unit)
+        local c = mock._playerIdentity.class
+        return c[1], c[2], c[3]
+    end
+    _G.UnitRace = function(_unit)
+        local r = mock._playerIdentity.race
+        return r[1], r[2], r[3]
+    end
+
     self._installed = true
 end
 
@@ -315,14 +354,28 @@ function Mock:Uninstall()
     _G.CreateFrame = self._previousCreateFrame
     _G.GetLocale = self._previousGetLocale
     _G.C_ChatInfo = self._previousC_ChatInfo
+    _G.UnitName = self._previousUnitName
+    _G.GetRealmName = self._previousGetRealmName
+    _G.UnitFactionGroup = self._previousUnitFactionGroup
+    _G.UnitClass = self._previousUnitClass
+    _G.UnitRace = self._previousUnitRace
     if self._previousC_RestrictedActions ~= nil or _G.C_RestrictedActions ~= nil then
         _G.C_RestrictedActions = self._previousC_RestrictedActions
     end
+    for name in pairs(self._trackedSavedVars) do
+        _G[name] = nil
+    end
+    self._trackedSavedVars = {}
     self._previousC_Timer = nil
     self._previousCreateFrame = nil
     self._previousGetLocale = nil
     self._previousC_ChatInfo = nil
     self._previousC_RestrictedActions = nil
+    self._previousUnitName = nil
+    self._previousGetRealmName = nil
+    self._previousUnitFactionGroup = nil
+    self._previousUnitClass = nil
+    self._previousUnitRace = nil
     self._installed = false
 end
 
@@ -403,6 +456,55 @@ function Mock:SetRestrictionState(state)
             end,
         }
     end
+end
+
+-------------------------------------------------------------------------------
+-- Store test helpers (design note section 8.1 / 8.2)
+-------------------------------------------------------------------------------
+
+---Merge identity fields into the mock's player-identity record. Omitted
+---fields keep their defaults (`name="TestChar"`, `realm="TestRealm"`,
+---`faction="Horde"`, `class={"Warrior","WARRIOR",1}`,
+---`race={"Tauren","Tauren",6}`). The globals installed by :Install close
+---over `self._playerIdentity` so subsequent calls reflect the new value
+---without re-install. Safe to call before or after :Install.
+---@param t table
+function Mock:SetPlayerIdentity(t)
+    if type(t) ~= "table" then
+        error("wow_mock:SetPlayerIdentity: t must be a table", 2)
+    end
+    for k, v in pairs(t) do
+        self._playerIdentity[k] = v
+    end
+end
+
+---Set `_G[name] = table or {}`. Tracked for cleanup so :Uninstall wipes
+---every SavedVariable global written through this helper.
+---@param name string
+---@param tbl table|nil
+function Mock:SetSavedVariable(name, tbl)
+    if type(name) ~= "string" or name == "" then
+        error("wow_mock:SetSavedVariable: name must be a non-empty string", 2)
+    end
+    _G[name] = tbl or {}
+    self._trackedSavedVars[name] = true
+end
+
+---Return `_G[name]` for spec assertions on the post-write SV shape.
+---@param name string
+---@return any
+function Mock:GetSavedVariable(name)
+    return _G[name]
+end
+
+---Clear `_G[name]` and stop tracking it. Idempotent.
+---@param name string
+function Mock:ClearSavedVariable(name)
+    if type(name) ~= "string" or name == "" then
+        error("wow_mock:ClearSavedVariable: name must be a non-empty string", 2)
+    end
+    _G[name] = nil
+    self._trackedSavedVars[name] = nil
 end
 
 -------------------------------------------------------------------------------

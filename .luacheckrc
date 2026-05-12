@@ -22,6 +22,9 @@ read_globals = {
     "CreateFrame", "C_Timer", "GetBuildInfo", "GetLocale",
     "C_RestrictedActions", "C_ChatInfo",
 
+    -- WoW API - Player identity (Store discriminators)
+    "UnitName", "GetRealmName", "UnitFactionGroup", "UnitClass", "UnitRace",
+
     -- WoW taint-isolation surface (SecureCall)
     "securecallfunction", "geterrorhandler",
 
