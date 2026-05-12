@@ -3,17 +3,17 @@
 -- Busted spec for DragonCore.Subscription. Pure Lua; no WoW mock required.
 -------------------------------------------------------------------------------
 
+local bootstrap = dofile("tests/spec/bootstrap.lua")
+
 describe("DragonCore.Subscription", function()
     local Subscription
 
     before_each(function()
-        -- LibStub uses the WoW global alias `strmatch` for `string.match`;
-        -- provide it so the vendored library loads under stock Lua 5.1.
-        _G.strmatch = _G.strmatch or string.match
-        -- Reset LibStub state so every test starts from a clean library table
-        -- and the Subscription class is rebuilt from source.
-        _G.LibStub = nil
-        dofile("Libs/LibStub/LibStub.lua")
+        -- Clean LibStub + WoW global state, then rebuild Subscription from
+        -- source. Subscription itself is pure Lua, but we still wipe WoW
+        -- globals so a prior spec's mock cannot leak in.
+        bootstrap.reset_globals(nil)
+        bootstrap.reload_libstub()
         dofile("Core/Subscription.lua")
         Subscription = LibStub("DragonCore-1.0").Subscription
     end)

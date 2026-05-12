@@ -20,9 +20,16 @@ read_globals = {
 
     -- WoW API (anticipated by other DragonCore modules)
     "CreateFrame", "C_Timer", "GetBuildInfo",
+    "C_RestrictedActions",
 
     -- WoW Globals - Version detection
     "WOW_PROJECT_ID", "WOW_PROJECT_MAINLINE",
+    "WOW_PROJECT_BURNING_CRUSADE_CLASSIC", "WOW_PROJECT_WRATH_CLASSIC",
+    "WOW_PROJECT_CATACLYSM_CLASSIC", "WOW_PROJECT_MISTS_CLASSIC",
+    "WOW_PROJECT_CLASSIC",
+
+    -- WoW Globals - Enums
+    "Enum",
 }
 
 -----------------------------------------------------------------------
