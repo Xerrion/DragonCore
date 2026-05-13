@@ -108,6 +108,8 @@ function M.new()
         race = { "Tauren", "Tauren", 6 },
     }
     self._trackedSavedVars = {}
+    self._registeredCategories = {}
+    self._openedCategory = nil
     self._previousC_Timer = nil
     self._previousCreateFrame = nil
     self._previousGetLocale = nil
@@ -118,6 +120,10 @@ function M.new()
     self._previousUnitFactionGroup = nil
     self._previousUnitClass = nil
     self._previousUnitRace = nil
+    self._previousSettings = nil
+    self._previousInterfaceOptions_AddCategory = nil
+    self._previousInterfaceOptionsFrame_OpenToCategory = nil
+    self._previousSlashCmdList = nil
     self._installed = false
     return self
 end
@@ -236,6 +242,10 @@ function Mock:Install()
     self._previousUnitFactionGroup = _G.UnitFactionGroup
     self._previousUnitClass = _G.UnitClass
     self._previousUnitRace = _G.UnitRace
+    self._previousSettings = _G.Settings
+    self._previousInterfaceOptions_AddCategory = _G.InterfaceOptions_AddCategory
+    self._previousInterfaceOptionsFrame_OpenToCategory = _G.InterfaceOptionsFrame_OpenToCategory
+    self._previousSlashCmdList = _G.SlashCmdList
     local mock = self
 
     _G.C_Timer = {
@@ -342,6 +352,48 @@ function Mock:Install()
         return r[1], r[2], r[3]
     end
 
+    -- Settings panel surface (design note section 7.1). Both the modern
+    -- _G.Settings table and the legacy InterfaceOptions_* entry points are
+    -- installed by default; specs that need to gate the renderer-flavor
+    -- switch call Mock:SetSettingsAPI(false) to remove _G.Settings.
+    _G.Settings = {
+        RegisterAddOnCategory = function(panel, name)
+            local category = { _category = true, panel = panel, name = name }
+            table.insert(mock._registeredCategories, {
+                api = "Settings.RegisterAddOnCategory",
+                panel = panel,
+                name = name,
+                category = category,
+            })
+            return category
+        end,
+        RegisterCanvasLayoutCategory = function(frame, name)
+            local category = { _category = true, panel = frame, name = name }
+            table.insert(mock._registeredCategories, {
+                api = "Settings.RegisterCanvasLayoutCategory",
+                panel = frame,
+                name = name,
+                category = category,
+            })
+            return category
+        end,
+        OpenToCategory = function(category)
+            mock._openedCategory = category
+        end,
+    }
+    _G.InterfaceOptions_AddCategory = function(panel)
+        table.insert(mock._registeredCategories, {
+            api = "InterfaceOptions_AddCategory",
+            panel = panel,
+            name = panel and panel.name or nil,
+            category = panel,
+        })
+    end
+    _G.InterfaceOptionsFrame_OpenToCategory = function(category)
+        mock._openedCategory = category
+    end
+    _G.SlashCmdList = {}
+
     self._installed = true
 end
 
@@ -359,6 +411,10 @@ function Mock:Uninstall()
     _G.UnitFactionGroup = self._previousUnitFactionGroup
     _G.UnitClass = self._previousUnitClass
     _G.UnitRace = self._previousUnitRace
+    _G.Settings = self._previousSettings
+    _G.InterfaceOptions_AddCategory = self._previousInterfaceOptions_AddCategory
+    _G.InterfaceOptionsFrame_OpenToCategory = self._previousInterfaceOptionsFrame_OpenToCategory
+    _G.SlashCmdList = self._previousSlashCmdList
     if self._previousC_RestrictedActions ~= nil or _G.C_RestrictedActions ~= nil then
         _G.C_RestrictedActions = self._previousC_RestrictedActions
     end
@@ -366,6 +422,8 @@ function Mock:Uninstall()
         _G[name] = nil
     end
     self._trackedSavedVars = {}
+    self._registeredCategories = {}
+    self._openedCategory = nil
     self._previousC_Timer = nil
     self._previousCreateFrame = nil
     self._previousGetLocale = nil
@@ -376,6 +434,10 @@ function Mock:Uninstall()
     self._previousUnitFactionGroup = nil
     self._previousUnitClass = nil
     self._previousUnitRace = nil
+    self._previousSettings = nil
+    self._previousInterfaceOptions_AddCategory = nil
+    self._previousInterfaceOptionsFrame_OpenToCategory = nil
+    self._previousSlashCmdList = nil
     self._installed = false
 end
 
@@ -505,6 +567,96 @@ function Mock:ClearSavedVariable(name)
     end
     _G[name] = nil
     self._trackedSavedVars[name] = nil
+end
+
+-------------------------------------------------------------------------------
+-- Settings test helpers (design note section 7.1)
+-------------------------------------------------------------------------------
+
+---Return a shallow copy of every recorded category registration. Each entry
+---is `{ api, panel, name, category }` where `api` discriminates between
+---`Settings.RegisterAddOnCategory`,
+---`Settings.RegisterCanvasLayoutCategory`, and
+---`InterfaceOptions_AddCategory`.
+---@return table[]
+function Mock:RegisteredCategories()
+    local out = {}
+    for i = 1, #self._registeredCategories do
+        out[i] = self._registeredCategories[i]
+    end
+    return out
+end
+
+---Return the last category handle passed to either
+---`Settings.OpenToCategory` or `InterfaceOptionsFrame_OpenToCategory`, or
+---nil if no panel has been opened.
+---@return table|nil
+function Mock:OpenedCategory()
+    return self._openedCategory
+end
+
+---Reset the recorded `OpenedCategory()` value. Useful between assertions
+---when a single spec opens the panel more than once.
+function Mock:ClearOpenedCategory()
+    self._openedCategory = nil
+end
+
+---Invoke `_G.SlashCmdList[slashKey]` with `msg`. Errors if the slash key
+---was never wired by a `:Register` call. Mirrors how Blizzard's chat parser
+---hands off `/dc reset` to the registered handler.
+---@param slashKey string  Upper-cased addon name (e.g. "DRAGONSHOUT").
+---@param msg string|nil   The argument portion of the slash invocation.
+function Mock:SlashCommand(slashKey, msg)
+    if type(slashKey) ~= "string" or slashKey == "" then
+        error("wow_mock:SlashCommand: slashKey must be a non-empty string", 2)
+    end
+    local handler = _G.SlashCmdList and _G.SlashCmdList[slashKey]
+    if type(handler) ~= "function" then
+        error("wow_mock:SlashCommand: no handler registered for SlashCmdList['"
+            .. slashKey .. "']", 2)
+    end
+    handler(msg or "")
+end
+
+---Toggle the presence of `_G.Settings` (the modern API). `true` restores the
+---stub installed by :Install; `false` nils `_G.Settings` so Settings.lua's
+---`pickRenderer` falls through to `Renderer_Legacy`. The legacy
+---`InterfaceOptions_AddCategory` is left in place regardless -- both
+---codepaths can coexist.
+---@param present boolean
+function Mock:SetSettingsAPI(present)
+    if present then
+        if _G.Settings == nil then
+            local mock = self
+            _G.Settings = {
+                RegisterAddOnCategory = function(panel, name)
+                    local category = { _category = true, panel = panel, name = name }
+                    table.insert(mock._registeredCategories, {
+                        api = "Settings.RegisterAddOnCategory",
+                        panel = panel,
+                        name = name,
+                        category = category,
+                    })
+                    return category
+                end,
+                RegisterCanvasLayoutCategory = function(frame, name)
+                    local category = { _category = true, panel = frame, name = name }
+                    table.insert(mock._registeredCategories, {
+                        api = "Settings.RegisterCanvasLayoutCategory",
+                        panel = frame,
+                        name = name,
+                        category = category,
+                    })
+                    return category
+                end,
+                OpenToCategory = function(category)
+                    mock._openedCategory = category
+                end,
+            }
+        end
+    else
+        _G.Settings = nil
+    end
 end
 
 -------------------------------------------------------------------------------

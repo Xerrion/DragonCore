@@ -26,6 +26,8 @@ local WOW_GLOBALS = {
     "WOW_PROJECT_CLASSIC",
     "C_RestrictedActions", "C_ChatInfo", "Enum",
     "UnitName", "GetRealmName", "UnitFactionGroup", "UnitClass", "UnitRace",
+    "Settings", "InterfaceOptions_AddCategory",
+    "InterfaceOptionsFrame_OpenToCategory", "SlashCmdList",
     "securecallfunction", "geterrorhandler",
 }
 

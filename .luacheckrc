@@ -25,6 +25,10 @@ read_globals = {
     -- WoW API - Player identity (Store discriminators)
     "UnitName", "GetRealmName", "UnitFactionGroup", "UnitClass", "UnitRace",
 
+    -- WoW API - Settings panel (Renderer_Modern / Renderer_Legacy)
+    "Settings", "InterfaceOptions_AddCategory",
+    "InterfaceOptionsFrame_OpenToCategory", "SlashCmdList",
+
     -- WoW taint-isolation surface (SecureCall)
     "securecallfunction", "geterrorhandler",
 
