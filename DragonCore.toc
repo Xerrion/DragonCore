@@ -1,0 +1,40 @@
+## Interface: 120005, 50503, 20505, 11508
+## Title: DragonCore
+## Notes: Taint-isolated event/store/lifecycle library for WoW addons.
+## Author: Xerrion
+## Version: @project-version@
+## X-Category: Library
+## X-License: MIT
+## X-Curse-Project-ID: <PLACEHOLDER>
+## X-Wago-ID: <PLACEHOLDER>
+
+# Libraries
+Libs\LibStub\LibStub.lua
+
+# Core foundation (zero DragonCore deps)
+Core\Subscription.lua
+Core\Capabilities.lua
+Core\SecureCall.lua
+Core\Dispatcher.lua
+
+# Core async + game-event primitives
+Core\Schedule.lua
+Core\Listener.lua
+Core\Bus.lua
+
+# Core domain modules
+Core\Locale.lua
+Core\AddonChannel\Serializer.lua
+Core\AddonChannel.lua
+Core\Store.lua
+
+# Settings stack (Renderers attach private namespaces; Settings.lua resolves both)
+Core\Settings\Renderer_Modern.lua
+Core\Settings\Renderer_Legacy.lua
+Core\Settings\Settings.lua
+
+# Orchestration root (Lifecycle last; bootstrap frame registers ADDON_LOADED / PLAYER_LOGIN / PLAYER_LOGOUT at load)
+Core\Lifecycle\Lifecycle.lua
+
+# Locale content (after Core\Locale.lua per resolveDeps; placed last per library-side convention)
+Locales\enUS.lua

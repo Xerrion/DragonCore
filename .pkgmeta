@@ -1,0 +1,22 @@
+package-as: DragonCore
+enable-toc-creation: no
+manual-changelog: .release/CHANGELOG.md
+
+externals:
+  Libs/LibStub: https://repos.wowace.com/wow/libstub/trunk
+
+ignore:
+  - .editorconfig
+  - .git*
+  - .luacheckrc
+  - .luarc.json
+  - .mise.toml
+  - .busted
+  - .release
+  - "*.md"
+  - "release-please-config.json"
+  - ".release-please-manifest.json"
+  - tests
+  - AGENTS.md
+  - Libs/LibStub/tests
+  - Libs/LibStub/LibStub.toc
