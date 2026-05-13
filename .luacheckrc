@@ -29,6 +29,9 @@ read_globals = {
     "Settings", "InterfaceOptions_AddCategory",
     "InterfaceOptionsFrame_OpenToCategory", "SlashCmdList",
 
+    -- WoW API - Lifecycle bootstrap
+    "IsLoggedIn", "IsAddOnLoaded", "C_AddOns",
+
     -- WoW taint-isolation surface (SecureCall)
     "securecallfunction", "geterrorhandler",
 

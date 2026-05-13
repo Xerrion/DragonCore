@@ -124,6 +124,11 @@ function M.new()
     self._previousInterfaceOptions_AddCategory = nil
     self._previousInterfaceOptionsFrame_OpenToCategory = nil
     self._previousSlashCmdList = nil
+    self._previousIsLoggedIn = nil
+    self._previousIsAddOnLoaded = nil
+    self._previousC_AddOns = nil
+    self._isLoggedIn = false
+    self._loadedAddons = {}
     self._installed = false
     return self
 end
@@ -246,6 +251,9 @@ function Mock:Install()
     self._previousInterfaceOptions_AddCategory = _G.InterfaceOptions_AddCategory
     self._previousInterfaceOptionsFrame_OpenToCategory = _G.InterfaceOptionsFrame_OpenToCategory
     self._previousSlashCmdList = _G.SlashCmdList
+    self._previousIsLoggedIn = _G.IsLoggedIn
+    self._previousIsAddOnLoaded = _G.IsAddOnLoaded
+    self._previousC_AddOns = _G.C_AddOns
     local mock = self
 
     _G.C_Timer = {
@@ -394,6 +402,23 @@ function Mock:Install()
     end
     _G.SlashCmdList = {}
 
+    -- Lifecycle bootstrap surface (design note section 8.1). IsLoggedIn /
+    -- IsAddOnLoaded close over `self` so SetIsLoggedIn / MarkAddOnLoaded
+    -- reflect immediately without re-installing the globals. C_AddOns
+    -- mirrors IsAddOnLoaded because some retail addons reach for the
+    -- namespaced form (Blizzard added it alongside the C_AddOns rollout).
+    _G.IsLoggedIn = function()
+        return mock._isLoggedIn and true or false
+    end
+    _G.IsAddOnLoaded = function(name)
+        return mock._loadedAddons[name] == true
+    end
+    _G.C_AddOns = {
+        IsAddOnLoaded = function(name)
+            return mock._loadedAddons[name] == true
+        end,
+    }
+
     self._installed = true
 end
 
@@ -415,6 +440,9 @@ function Mock:Uninstall()
     _G.InterfaceOptions_AddCategory = self._previousInterfaceOptions_AddCategory
     _G.InterfaceOptionsFrame_OpenToCategory = self._previousInterfaceOptionsFrame_OpenToCategory
     _G.SlashCmdList = self._previousSlashCmdList
+    _G.IsLoggedIn = self._previousIsLoggedIn
+    _G.IsAddOnLoaded = self._previousIsAddOnLoaded
+    _G.C_AddOns = self._previousC_AddOns
     if self._previousC_RestrictedActions ~= nil or _G.C_RestrictedActions ~= nil then
         _G.C_RestrictedActions = self._previousC_RestrictedActions
     end
@@ -438,6 +466,11 @@ function Mock:Uninstall()
     self._previousInterfaceOptions_AddCategory = nil
     self._previousInterfaceOptionsFrame_OpenToCategory = nil
     self._previousSlashCmdList = nil
+    self._previousIsLoggedIn = nil
+    self._previousIsAddOnLoaded = nil
+    self._previousC_AddOns = nil
+    self._isLoggedIn = false
+    self._loadedAddons = {}
     self._installed = false
 end
 
@@ -657,6 +690,78 @@ function Mock:SetSettingsAPI(present)
     else
         _G.Settings = nil
     end
+end
+
+-------------------------------------------------------------------------------
+-- Lifecycle test helpers (design note section 8.1)
+--
+-- IsLoggedIn / IsAddOnLoaded / C_AddOns.IsAddOnLoaded are installed by
+-- :Install and read closures over `self`, so the setters below take effect
+-- without re-installing globals. The Fire* helpers walk every frame mock
+-- and invoke OnEvent for each registered for the matching event -- the
+-- Lifecycle bootstrap frame is one such frame.
+-------------------------------------------------------------------------------
+
+---Set the value `_G.IsLoggedIn()` returns. Defaults to false on :Install.
+---Lifecycle's LoD fast-forward path reads this synchronously inside its
+---:Register call.
+---@param logged boolean
+function Mock:SetIsLoggedIn(logged)
+    self._isLoggedIn = logged and true or false
+end
+
+---Mark an addon as loaded so subsequent `_G.IsAddOnLoaded(name)` calls
+---return true. Does NOT fire ADDON_LOADED; use :FireAddonLoaded for that.
+---@param name string
+function Mock:MarkAddOnLoaded(name)
+    if type(name) ~= "string" or name == "" then
+        error("wow_mock:MarkAddOnLoaded: name must be a non-empty string", 2)
+    end
+    self._loadedAddons[name] = true
+end
+
+---Fire ADDON_LOADED with arg1 = `name` on every frame currently registered
+---for the event. Marks the addon loaded (so post-fire IsAddOnLoaded probes
+---reflect reality) before dispatching.
+---@param name string
+function Mock:FireAddonLoaded(name)
+    if type(name) ~= "string" or name == "" then
+        error("wow_mock:FireAddonLoaded: name must be a non-empty string", 2)
+    end
+    self._loadedAddons[name] = true
+    self:FireEvent("ADDON_LOADED", name)
+end
+
+---Fire PLAYER_LOGIN on every frame currently registered for the event.
+---Flips `_G.IsLoggedIn()` to true before dispatching (mirrors production
+---order: the global flips before the event fires).
+function Mock:FirePlayerLogin()
+    self._isLoggedIn = true
+    self:FireEvent("PLAYER_LOGIN")
+end
+
+---Fire PLAYER_LOGOUT on every frame currently registered for the event.
+---Lifecycle does not act on this in v0; the helper exists for completeness
+---and so future modules can exercise teardown paths.
+function Mock:FirePlayerLogout()
+    self:FireEvent("PLAYER_LOGOUT")
+end
+
+---Fire PLAYER_ENTERING_WORLD with the documented two-argument payload.
+---Lifecycle does not observe this event (design note section 3.2);
+---available for other modules / future tests.
+---@param isInitialLogin boolean
+---@param isReloadingUi boolean
+function Mock:FirePlayerEnteringWorld(isInitialLogin, isReloadingUi)
+    self:FireEvent("PLAYER_ENTERING_WORLD",
+        isInitialLogin and true or false,
+        isReloadingUi and true or false)
+end
+
+---Fire ADDONS_UNLOADING on every frame currently registered for the event.
+---Lifecycle does not register for this; available for completeness.
+function Mock:FireAddonsUnloading()
+    self:FireEvent("ADDONS_UNLOADING")
 end
 
 -------------------------------------------------------------------------------

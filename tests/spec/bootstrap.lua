@@ -28,6 +28,7 @@ local WOW_GLOBALS = {
     "UnitName", "GetRealmName", "UnitFactionGroup", "UnitClass", "UnitRace",
     "Settings", "InterfaceOptions_AddCategory",
     "InterfaceOptionsFrame_OpenToCategory", "SlashCmdList",
+    "IsLoggedIn", "IsAddOnLoaded", "C_AddOns",
     "securecallfunction", "geterrorhandler",
 }
 
