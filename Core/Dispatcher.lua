@@ -1,7 +1,7 @@
 -------------------------------------------------------------------------------
 -- Dispatcher.lua
 -- DragonCore internal seam: snapshot-on-iterate dispatch with deferred sweep.
--- Extracted from five inline copies in Listener / Bus / AddonChannel / Store /
+-- Extracted from five inline copies in Listener / EventBus / AddonChannel / Store /
 -- Lifecycle. Pure refactor; no public surface; zero behaviour change.
 --
 -- Three functions:

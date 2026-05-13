@@ -1,7 +1,7 @@
 -------------------------------------------------------------------------------
--- Bus.lua
+-- EventBus.lua
 -- DragonCore in-process pub/sub: per-addon-instance (:New) or process-wide
--- shared (:Shared) message bus. Pure Lua table -- ZERO `CreateFrame` calls.
+-- shared (:Shared) event bus. Pure Lua table -- ZERO `CreateFrame` calls.
 -- A module with no frame cannot leak frame state; this is the structural
 -- generalisation of Listener's unnamed-Frame primitive (workspace
 -- AGENTS.md "Known Gotchas -> Ace3 AceEvent30Frame is a shared global").
@@ -31,13 +31,13 @@ local function resolveDeps()
     local secureCall = DragonCore.SecureCall
     local dispatcher = DragonCore.Dispatcher
     if not subscription then
-        error("DragonCore.Bus: DragonCore.Subscription is not loaded", 3)
+        error("DragonCore.EventBus: DragonCore.Subscription is not loaded", 3)
     end
     if not secureCall then
-        error("DragonCore.Bus: DragonCore.SecureCall is not loaded", 3)
+        error("DragonCore.EventBus: DragonCore.SecureCall is not loaded", 3)
     end
     if not dispatcher then
-        error("DragonCore.Bus: DragonCore.Dispatcher is not loaded", 3)
+        error("DragonCore.EventBus: DragonCore.Dispatcher is not loaded", 3)
     end
     return subscription, secureCall, dispatcher
 end
@@ -48,72 +48,72 @@ end
 
 local function validateAddon(method, addon)
     if addon == nil then
-        error("DragonCore.Bus:" .. method ..
+        error("DragonCore.EventBus:" .. method ..
             ": addon is required (DragonCore.Addon)", 3)
     end
     if type(addon) ~= "table" then
-        error("DragonCore.Bus:" .. method ..
+        error("DragonCore.EventBus:" .. method ..
             ": addon must be a table (DragonCore.Addon), got " .. type(addon), 3)
     end
     if type(addon.name) ~= "string" or addon.name == "" then
-        error("DragonCore.Bus:" .. method ..
+        error("DragonCore.EventBus:" .. method ..
             ": addon.name must be a non-empty string", 3)
     end
 end
 
 local function validateTopic(method, topic)
     if type(topic) ~= "string" or topic == "" then
-        error("DragonCore.Bus:" .. method ..
+        error("DragonCore.EventBus:" .. method ..
             ": topic must be a non-empty string", 3)
     end
 end
 
 local function validateCb(method, cb)
     if type(cb) ~= "function" then
-        error("DragonCore.Bus:" .. method ..
+        error("DragonCore.EventBus:" .. method ..
             ": cb must be a function", 3)
     end
 end
 
 local function validateChannel(channel)
     if type(channel) ~= "string" or channel == "" then
-        error("DragonCore.Bus:Shared: channel must be a non-empty string", 3)
+        error("DragonCore.EventBus:Shared: channel must be a non-empty string", 3)
     end
 end
 
 local function checkLive(self, method)
     if self._disposed then
-        error("DragonCore.Bus:" .. method ..
-            ": Bus has been disposed (label=" .. self._label .. ")", 3)
+        error("DragonCore.EventBus:" .. method ..
+            ": EventBus has been disposed (label=" .. self._label .. ")", 3)
     end
 end
 
 -------------------------------------------------------------------------------
--- Shared registry (Multiton: one Bus per channel string, process-wide)
+-- Shared registry (Multiton: one EventBus per channel string, process-wide)
 --
 -- The registry is file-private. Each spec dofiles this module fresh, so the
 -- registry resets between specs by construction. In production this table is
--- the single source of truth for shared Buses across the Lua state.
+-- the single source of truth for shared EventBuses across the Lua state.
 -------------------------------------------------------------------------------
 
 local sharedBuses = {}
 
 -------------------------------------------------------------------------------
--- Bus
+-- EventBus
 -------------------------------------------------------------------------------
 
----@class DragonCore.Bus
+---@class DragonCore.EventBus
 ---@field private _subs table<string, table[]>
 ---@field private _label string
 ---@field private _addon DragonCore.Addon|nil
 ---@field private _sharedChannel string|nil
 ---@field private _disposed boolean
 ---@field private _depthBag DragonCore.Dispatcher.DepthBag
-local Bus = {}
-Bus.__index = Bus
+local EventBus = {}
+EventBus.__index = EventBus
 
 -- Internal helper: shared constructor. `label` is what appears in error
--- messages; `addon` may be nil for Shared Buses.
+-- messages; `addon` may be nil for Shared EventBuses.
 local function construct(addon, label, sharedChannel)
     local _, _, Dispatcher = resolveDeps()
     return setmetatable({
@@ -123,7 +123,7 @@ local function construct(addon, label, sharedChannel)
         _subs = {},
         _disposed = false,
         _depthBag = Dispatcher.NewDepthBag(),
-    }, Bus)
+    }, EventBus)
 end
 
 -- Internal helper: rebuild self._subs[topic] dropping cancelled entries.
@@ -172,28 +172,28 @@ local function buildSubscription(self, topic, entry)
     end)
 end
 
----Construct a new per-addon-instance Bus. No frame, no global state.
+---Construct a new per-addon-instance EventBus. No frame, no global state.
 ---@param addon DragonCore.Addon  required; must have a non-empty `name` field.
----@return DragonCore.Bus
-function Bus:New(addon)
+---@return DragonCore.EventBus
+function EventBus:New(addon)
     validateAddon("New", addon)
     return construct(addon, addon.name, nil)
 end
 
----Return a process-wide named Bus shared across DragonCore consumers. The
----first call for a given `channel` constructs the Bus; subsequent calls
+---Return a process-wide named EventBus shared across DragonCore consumers. The
+---first call for a given `channel` constructs the EventBus; subsequent calls
 ---return the same instance. Explicit opt-in for cross-addon coordination
 ---(e.g. DragonLoot <-> DragonToast).
 ---
 ---ADR-0003 line 260 specifies `:Shared(channel)` with NO addon arg. The
 ---shared instance is process-wide and intentionally NOT owned by any one
----Addon; Resource Bag (R-3) tracking on Shared Buses is therefore NOT
+---Addon; Resource Bag (R-3) tracking on Shared EventBuses is therefore NOT
 ---available via this factory in v0. Consumers who want per-addon lifecycle
 ---tracking on a shared channel should retain Subscriptions explicitly and
 ---cancel them in their :OnDisable.
 ---@param channel string  non-empty channel name.
----@return DragonCore.Bus
-function Bus:Shared(channel)
+---@return DragonCore.EventBus
+function EventBus:Shared(channel)
     validateChannel(channel)
     local existing = sharedBuses[channel]
     if existing and not existing._disposed then
@@ -208,10 +208,10 @@ end
 ---@param topic string  non-empty
 ---@param cb fun(...)   receives the payload as varargs.
 ---@return DragonCore.Subscription
-function Bus:On(topic, cb)
-    checkLive(self, "On")
-    validateTopic("On", topic)
-    validateCb("On", cb)
+function EventBus:Subscribe(topic, cb)
+    checkLive(self, "Subscribe")
+    validateTopic("Subscribe", topic)
+    validateCb("Subscribe", cb)
 
     local list = self._subs[topic]
     if not list then
@@ -230,16 +230,16 @@ end
 ---and forget; topics with no subscribers are a no-op.
 ---@param topic string
 ---@param ... any
-function Bus:Send(topic, ...)
-    checkLive(self, "Send")
-    validateTopic("Send", topic)
+function EventBus:Publish(topic, ...)
+    checkLive(self, "Publish")
+    validateTopic("Publish", topic)
     dispatch(self, topic, ...)
 end
 
----Cancel every subscription on this Bus and mark it unusable. Per-instance
----Buses are released; Shared Buses are evicted from the process-wide
+---Cancel every subscription on this EventBus and mark it unusable. Per-instance
+---EventBuses are released; Shared EventBuses are evicted from the process-wide
 ---registry so the next `:Shared(channel)` constructs fresh. Idempotent.
-function Bus:Dispose()
+function EventBus:Dispose()
     if self._disposed then return end
     self._disposed = true
 
@@ -260,4 +260,4 @@ function Bus:Dispose()
     end
 end
 
-DragonCore.Bus = Bus
+DragonCore.EventBus = EventBus

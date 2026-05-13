@@ -1,7 +1,7 @@
 -------------------------------------------------------------------------------
 -- Store_spec.lua
 -- Busted spec for DragonCore.Store. Loads Subscription -> SecureCall -> Store.
--- No Capabilities, Listener, Bus, Schedule, Locale, or AddonChannel deps:
+-- No Capabilities, Listener, EventBus, Schedule, Locale, or AddonChannel deps:
 -- Store is the most self-contained domain module (design note section 2).
 -------------------------------------------------------------------------------
 

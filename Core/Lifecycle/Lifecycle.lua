@@ -24,7 +24,7 @@
 --   * `:Track`           -- Resource Bag for Subscriptions whose lifetime
 --                            is bound to the Addon's Enabled state.
 --
--- Dispatcher: snapshot-on-iterate + deferred-sweep copied from Bus / Store.
+-- Dispatcher: snapshot-on-iterate + deferred-sweep copied from EventBus / Store.
 -- Fifth in-process consumer of the pattern (the trigger Step 10 closes out).
 -- All callback invocation routed through DragonCore.SecureCall:Invoke per
 -- ADR Invariant D.3 (line 647).
@@ -71,7 +71,7 @@ end
 --
 -- error(..., 3) so the source position is pinned at the consumer's call
 -- site -- helper and public method are both peeled off the stack. Mirrors
--- the verbatim shape of validateAddon in Listener / Bus / Locale / Store /
+-- the verbatim shape of validateAddon in Listener / EventBus / Locale / Store /
 -- Settings.
 -------------------------------------------------------------------------------
 
@@ -155,7 +155,7 @@ end
 
 -- Internal helper: snapshot-on-iterate dispatch for one slot. Delegates to
 -- the shared DragonCore.Dispatcher (design note Step 10; ADR-0003 §B). All
--- five inline copies (Listener / Bus / AddonChannel / Store / Lifecycle)
+-- five inline copies (Listener / EventBus / AddonChannel / Store / Lifecycle)
 -- route through the same primitive.
 local function dispatch(self, slot)
     local field = SLOT_FIELDS[slot]

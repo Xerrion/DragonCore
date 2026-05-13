@@ -20,7 +20,7 @@ Core\Dispatcher.lua
 # Core async + game-event primitives
 Core\Schedule.lua
 Core\Listener.lua
-Core\Bus.lua
+Core\EventBus.lua
 
 # Core domain modules
 Core\Locale.lua

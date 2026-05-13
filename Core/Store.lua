@@ -18,7 +18,7 @@
 --   :On(event, fn)            -> DragonCore.Subscription
 --   :Dispose()                -> ()
 --
--- Dispatcher: snapshot-on-iterate + deferred-sweep copied from Bus.lua. The
+-- Dispatcher: snapshot-on-iterate + deferred-sweep copied from EventBus.lua. The
 -- fourth such copy in DragonCore -- design note section 6 deliberately
 -- defers extraction of `DragonCore.Dispatcher` until trigger fires (fifth
 -- consumer, shared bug, or uniform capability need).
@@ -41,7 +41,7 @@ local DragonCore = LibStub:NewLibrary(MAJOR, MINOR) or LibStub(MAJOR)
 if not DragonCore then return end
 
 -------------------------------------------------------------------------------
--- Lazy dependency resolution (mirrors Schedule / Listener / Bus /
+-- Lazy dependency resolution (mirrors Schedule / Listener / EventBus /
 -- AddonChannel). Capabilities is intentionally NOT a dep (design note
 -- section 2 / ADR line 401: SavedVariables is bedrock).
 -------------------------------------------------------------------------------
@@ -80,7 +80,7 @@ local VALID_PROFILE_MODES = { Default = true, Character = true }
 --
 -- error(..., 3) so the reported source position is the consumer's call site
 -- -- the helper and the public method are both peeled off the stack. Pattern
--- matches Listener / Bus / Locale / AddonChannel verbatim.
+-- matches Listener / EventBus / Locale / AddonChannel verbatim.
 -------------------------------------------------------------------------------
 
 local function validateAddon(method, addon)
@@ -267,7 +267,7 @@ local function dispatch(self, event, ...)
     end, function(k) sweep(self, k) end)
 end
 
--- Internal helper: build the Subscription handle (mirrors Bus).
+-- Internal helper: build the Subscription handle (mirrors EventBus).
 local function buildSubscription(self, event, entry)
     local Subscription, _, Dispatcher = resolveDeps()
     return Subscription.New(function()

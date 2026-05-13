@@ -11,7 +11,7 @@
 --   :Refresh(addon)           -> { ok, errors? }
 --
 -- Argument-shape errors raise at error level 3 (validateAddon helper +
--- public method peeled off the stack, matching Listener / Bus / Locale /
+-- public method peeled off the stack, matching Listener / EventBus / Locale /
 -- AddonChannel / Store). Schema-content errors return `{ok = false, errors}`
 -- so the consumer can inspect and decide; argument-shape errors and
 -- :Open / :Refresh "not registered" cases still raise.
@@ -107,7 +107,7 @@ local VALUE_NODE_TYPES = {
 --
 -- error(..., 3) so the reported source position is the consumer's call site
 -- -- the helper and the public method are both peeled off the stack. Matches
--- Listener / Bus / Locale / AddonChannel / Store verbatim.
+-- Listener / EventBus / Locale / AddonChannel / Store verbatim.
 -------------------------------------------------------------------------------
 
 local function validateAddon(method, addon)

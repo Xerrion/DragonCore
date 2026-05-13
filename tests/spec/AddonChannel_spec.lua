@@ -39,7 +39,7 @@ describe("DragonCore.AddonChannel", function()
         mock:Install()
 
         -- securecallfunction passthrough so SecureCall:Invoke runs the cb
-        -- inline (matches Bus / Listener spec setup).
+        -- inline (matches EventBus / Listener spec setup).
         _G.securecallfunction = function(fn, ...) return fn(...) end
     end)
 

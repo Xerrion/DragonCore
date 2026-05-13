@@ -3,7 +3,7 @@
 -- DragonCore inter-addon wire channel. Replaces AceComm-3.0 with a leaner,
 -- taint-free path: per-channel unnamed Frame, in-house Serializer (no
 -- CallbackHandler dependency), honest discriminated SendResult, and a
--- snapshot-on-iterate dispatcher copied from Bus.
+-- snapshot-on-iterate dispatcher copied from EventBus.
 --
 -- Public surface (ADR-0003 section B.6 / design note section 1):
 --   :Open(addon, prefix)              -> DragonCore.AddonChannel
@@ -21,7 +21,7 @@
 -- section 3.3 / ADR line 574). The wow_mock CreateFrame shim asserts
 -- name == nil structurally; production code never passes a name.
 --
--- Dispatcher: snapshot-on-iterate + deferred-sweep copied from Bus.lua.
+-- Dispatcher: snapshot-on-iterate + deferred-sweep copied from EventBus.lua.
 -- Pillar 3 inflection deliberately deferred (design note section 7).
 --
 -- Supported versions: Retail, MoP Classic, TBC Anniversary
@@ -43,7 +43,7 @@ local VALID_DISTRIBUTIONS = {
 }
 
 -------------------------------------------------------------------------------
--- Lazy dependency resolution (mirrors Schedule / Listener / Bus).
+-- Lazy dependency resolution (mirrors Schedule / Listener / EventBus).
 -- Subscription / SecureCall / Capabilities / Serializer are captured per
 -- call so spec dofile order stays flexible.
 -------------------------------------------------------------------------------

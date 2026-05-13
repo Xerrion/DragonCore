@@ -68,7 +68,7 @@
 --
 -- Error policy (AdvanceTime / FireEvent / FireUnitEvent):
 --   Callbacks are invoked raw -- exceptions propagate to the caller. Schedule
---   / Listener / Bus production code always wraps the consumer cb in
+--   / Listener / EventBus production code always wraps the consumer cb in
 --   DragonCore.SecureCall:Invoke, which traps errors and routes them to
 --   geterrorhandler(), so in well-formed specs an exception never reaches
 --   the test harness. Tests that want to assert on raw behaviour can use
@@ -138,7 +138,7 @@ end
 -------------------------------------------------------------------------------
 
 ---Construct a minimal DragonCore.Addon stub that satisfies the v0
----Listener:New / Bus:New validation contract (section 6.1 read-surface:
+---Listener:New / EventBus:New validation contract (section 6.1 read-surface:
 ---one field, `name :: string`, non-empty). Lifecycle (Step 5+) will replace
 ---this with the real Addon object; specs that exercise Lifecycle must not
 ---use this helper.
