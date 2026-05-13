@@ -19,6 +19,7 @@ describe("DragonCore.Store", function()
 
         dofile("Core/Subscription.lua")
         dofile("Core/SecureCall.lua")
+        dofile("Core/Dispatcher.lua")
         dofile("Core/Store.lua")
 
         DragonCore = LibStub("DragonCore-1.0")

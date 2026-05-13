@@ -53,13 +53,17 @@ if not DragonCore then return end
 local function resolveDeps()
     local subscription = DragonCore.Subscription
     local secureCall = DragonCore.SecureCall
+    local dispatcher = DragonCore.Dispatcher
     if not subscription then
         error("DragonCore.Lifecycle: DragonCore.Subscription is not loaded", 3)
     end
     if not secureCall then
         error("DragonCore.Lifecycle: DragonCore.SecureCall is not loaded", 3)
     end
-    return subscription, secureCall
+    if not dispatcher then
+        error("DragonCore.Lifecycle: DragonCore.Dispatcher is not loaded", 3)
+    end
+    return subscription, secureCall, dispatcher
 end
 
 -------------------------------------------------------------------------------
@@ -126,8 +130,7 @@ end
 ---@field private _disableCbs table[]
 ---@field private _namespaces table<string, any>
 ---@field private _tracked DragonCore.Subscription[]
----@field private _dispatchDepth table<string, integer>
----@field private _sweepQueued table<string, boolean>
+---@field private _depthBag DragonCore.Dispatcher.DepthBag
 local Addon = {}
 Addon.__index = Addon
 
@@ -150,46 +153,31 @@ local function sweep(self, slot)
     self[field] = live
 end
 
--- Internal helper: snapshot-on-iterate dispatch for one slot. Mirrors Store
--- / Bus / Listener verbatim (fifth inline copy; design note section 6
--- closes the deferral, Step 10 extracts to DragonCore.Dispatcher).
+-- Internal helper: snapshot-on-iterate dispatch for one slot. Delegates to
+-- the shared DragonCore.Dispatcher (design note Step 10; ADR-0003 §B). All
+-- five inline copies (Listener / Bus / AddonChannel / Store / Lifecycle)
+-- route through the same primitive.
 local function dispatch(self, slot)
     local field = SLOT_FIELDS[slot]
     local list = self[field]
     if not list or #list == 0 then return end
 
-    self._dispatchDepth[slot] = (self._dispatchDepth[slot] or 0) + 1
-    local _, SecureCall = resolveDeps()
-    local len = #list
-    for i = 1, len do
-        local entry = list[i]
-        if not entry.cancelled then
-            SecureCall:Invoke(entry.cb, self)
-        end
-    end
-    self._dispatchDepth[slot] = self._dispatchDepth[slot] - 1
-
-    if self._dispatchDepth[slot] == 0 then
-        self._dispatchDepth[slot] = nil
-        if self._sweepQueued[slot] then
-            self._sweepQueued[slot] = nil
-            sweep(self, slot)
-        end
-    end
+    local _, SecureCall, Dispatcher = resolveDeps()
+    Dispatcher.Run(self._depthBag, slot, list, function(entry)
+        SecureCall:Invoke(entry.cb, self)
+    end, function(k) sweep(self, k) end)
 end
 
 -- Internal helper: build the Subscription handle whose onCancel flips
--- entry.cancelled and triggers immediate-or-deferred sweep depending on
--- whether dispatch is in-flight.
+-- entry.cancelled and asks the Dispatcher to either sweep eagerly (outside
+-- dispatch) or queue a deferred sweep (during dispatch).
 local function buildSubscription(self, slot, entry)
-    local Subscription = resolveDeps()
+    local Subscription, _, Dispatcher = resolveDeps()
     return Subscription.New(function()
         entry.cancelled = true
-        if (self._dispatchDepth[slot] or 0) == 0 then
-            sweep(self, slot)
-        else
-            self._sweepQueued[slot] = true
-        end
+        Dispatcher.RequestSweep(self._depthBag, slot, function(k)
+            sweep(self, k)
+        end)
     end)
 end
 
@@ -199,7 +187,7 @@ end
 -- note section 3.5). Multiple subscribers permitted.
 local function subscribeHook(self, slot, fn, fireImmediatelyWhen)
     validateHookCb(slot, fn)
-    resolveDeps()
+    local _, SecureCall = resolveDeps()
 
     local list = self[SLOT_FIELDS[slot]]
     local entry = { cb = fn, cancelled = false }
@@ -208,7 +196,6 @@ local function subscribeHook(self, slot, fn, fireImmediatelyWhen)
     entry.sub = sub
 
     if fireImmediatelyWhen(self.state) then
-        local _, SecureCall = resolveDeps()
         SecureCall:Invoke(fn, self)
     end
 
@@ -398,7 +385,7 @@ local Lifecycle = {}
 ---@return DragonCore.Addon
 function Lifecycle:Register(name)
     validateName("Register", name)
-    resolveDeps()
+    local _, _, Dispatcher = resolveDeps()
 
     local existing = addons[name]
     if existing then return existing end
@@ -411,8 +398,7 @@ function Lifecycle:Register(name)
         _disableCbs = {},
         _namespaces = {},
         _tracked = {},
-        _dispatchDepth = {},
-        _sweepQueued = {},
+        _depthBag = Dispatcher.NewDepthBag(),
     }, Addon)
     addons[name] = addon
     addonOrder[#addonOrder + 1] = addon

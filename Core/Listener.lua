@@ -42,13 +42,17 @@ if not DragonCore then return end
 local function resolveDeps()
     local subscription = DragonCore.Subscription
     local secureCall = DragonCore.SecureCall
+    local dispatcher = DragonCore.Dispatcher
     if not subscription then
         error("DragonCore.Listener: DragonCore.Subscription is not loaded", 3)
     end
     if not secureCall then
         error("DragonCore.Listener: DragonCore.SecureCall is not loaded", 3)
     end
-    return subscription, secureCall
+    if not dispatcher then
+        error("DragonCore.Listener: DragonCore.Dispatcher is not loaded", 3)
+    end
+    return subscription, secureCall, dispatcher
 end
 
 -------------------------------------------------------------------------------
@@ -103,15 +107,14 @@ end
 ---@field private _subs table<string, table[]>
 ---@field private _addon DragonCore.Addon
 ---@field private _disposed boolean
----@field private _dispatchDepth table<string, integer>
----@field private _sweepQueued table<string, boolean>
+---@field private _depthBag DragonCore.Dispatcher.DepthBag
 local Listener = {}
 Listener.__index = Listener
 
 -- Internal helper: rebuild self._subs[event], dropping cancelled entries.
 -- When the resulting list is empty, unregister the event from the frame and
 -- drop the slot entirely. Called outside dispatch or queued for end-of-
--- dispatch via self._sweepQueued (see :_dispatch below).
+-- dispatch via the shared Dispatcher (see :_dispatch below).
 local function sweep(self, event)
     local list = self._subs[event]
     if not list then return end
@@ -129,41 +132,33 @@ local function sweep(self, event)
     end
 end
 
--- Internal helper: snapshot-on-iterate dispatch for `event`. Iterates the
--- list captured at the top of the loop; entries cancelled mid-dispatch are
--- skipped; entries added mid-dispatch are NOT visible until the next fire.
+-- Internal helper: snapshot-on-iterate dispatch for `event`. Iterates a
+-- snapshot of length `#list` captured by Dispatcher.Run; entries cancelled
+-- mid-dispatch are skipped; entries added mid-dispatch are NOT visible until
+-- the next fire.
 local function dispatch(self, event, ...)
     if self._disposed then return end
     local list = self._subs[event]
     if not list then return end
 
-    self._dispatchDepth[event] = (self._dispatchDepth[event] or 0) + 1
-    local _, SecureCall = resolveDeps()
-    local len = #list
-    for i = 1, len do
-        local entry = list[i]
-        if not entry.cancelled then
-            -- `:OnceOnly` semantics: cancel the Subscription BEFORE invoking
-            -- so once-ness holds even if the handler errors AND so the
-            -- consumer-visible `sub:IsCancelled()` reports true after the
-            -- single fire. Subscription:Cancel is idempotent; its onCancel
-            -- flips entry.cancelled and queues a sweep (we are inside
-            -- dispatch, so the sweep is deferred to end-of-dispatch).
-            if entry.once and entry.sub then
-                entry.sub:Cancel()
-            end
-            SecureCall:Invoke(entry.cb, ...)
+    local _, SecureCall, Dispatcher = resolveDeps()
+    -- Pack varargs so the invoke closure can forward them; `select("#", ...)`
+    -- + `unpack(args, 1, n)` preserves nils-in-middle and trailing nils
+    -- (Lua 5.1 has no table.pack).
+    local n = select("#", ...)
+    local args = { ... }
+    Dispatcher.Run(self._depthBag, event, list, function(entry)
+        -- `:OnceOnly` semantics: cancel the Subscription BEFORE invoking
+        -- so once-ness holds even if the handler errors AND so the
+        -- consumer-visible `sub:IsCancelled()` reports true after the
+        -- single fire. Subscription:Cancel is idempotent; its onCancel
+        -- flips entry.cancelled and queues a sweep (we are inside
+        -- dispatch, so the sweep is deferred to end-of-dispatch).
+        if entry.once and entry.sub then
+            entry.sub:Cancel()
         end
-    end
-    self._dispatchDepth[event] = self._dispatchDepth[event] - 1
-
-    if self._dispatchDepth[event] == 0 then
-        self._dispatchDepth[event] = nil
-        if self._sweepQueued[event] then
-            self._sweepQueued[event] = nil
-            sweep(self, event)
-        end
-    end
+        SecureCall:Invoke(entry.cb, unpack(args, 1, n))
+    end, function(k) sweep(self, k) end)
 end
 
 -- Internal helper: add a sub entry to self._subs[event] and register the
@@ -188,18 +183,16 @@ local function addEntry(self, event, entry, kind, unit1, unit2)
 end
 
 -- Internal helper: build the Subscription handle for a given entry. Its
--- onCancel flips entry.cancelled and either sweeps eagerly (outside dispatch)
--- or queues a deferred sweep (during dispatch) to keep snapshot-on-iterate
--- consistent.
+-- onCancel flips entry.cancelled and asks the Dispatcher to either sweep
+-- eagerly (outside dispatch) or queue a deferred sweep (during dispatch)
+-- to keep snapshot-on-iterate consistent.
 local function buildSubscription(self, event, entry)
-    local Subscription = resolveDeps()
+    local Subscription, _, Dispatcher = resolveDeps()
     return Subscription.New(function()
         entry.cancelled = true
-        if (self._dispatchDepth[event] or 0) == 0 then
-            sweep(self, event)
-        else
-            self._sweepQueued[event] = true
-        end
+        Dispatcher.RequestSweep(self._depthBag, event, function(k)
+            sweep(self, k)
+        end)
     end)
 end
 
@@ -211,13 +204,13 @@ end
 ---@return DragonCore.Listener
 function Listener:New(addon)
     validateAddon("New", addon)
+    local _, _, Dispatcher = resolveDeps()
 
     local instance = setmetatable({
         _addon = addon,
         _subs = {},
         _disposed = false,
-        _dispatchDepth = {},
-        _sweepQueued = {},
+        _depthBag = Dispatcher.NewDepthBag(),
     }, Listener)
 
     -- Unnamed frame: the structural answer to AceEvent30Frame. The second
@@ -352,8 +345,8 @@ function Listener:Dispose()
     end
 
     self._subs = {}
-    self._dispatchDepth = {}
-    self._sweepQueued = {}
+    local _, _, Dispatcher = resolveDeps()
+    self._depthBag = Dispatcher.NewDepthBag()
     self._frame:UnregisterAllEvents()
     self._frame:SetScript("OnEvent", nil)
     self._frame = nil

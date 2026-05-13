@@ -49,13 +49,17 @@ if not DragonCore then return end
 local function resolveDeps()
     local subscription = DragonCore.Subscription
     local secureCall = DragonCore.SecureCall
+    local dispatcher = DragonCore.Dispatcher
     if not subscription then
         error("DragonCore.Store: DragonCore.Subscription is not loaded", 3)
     end
     if not secureCall then
         error("DragonCore.Store: DragonCore.SecureCall is not loaded", 3)
     end
-    return subscription, secureCall
+    if not dispatcher then
+        error("DragonCore.Store: DragonCore.Dispatcher is not loaded", 3)
+    end
+    return subscription, secureCall, dispatcher
 end
 
 -------------------------------------------------------------------------------
@@ -228,8 +232,7 @@ end
 ---@field private _profileMode string
 ---@field private _subs table<string, table[]>
 ---@field private _disposed boolean
----@field private _dispatchDepth table<string, integer>
----@field private _sweepQueued table<string, boolean>
+---@field private _depthBag DragonCore.Dispatcher.DepthBag
 local Store = {}
 Store.__index = Store
 
@@ -248,44 +251,30 @@ local function sweep(self, event)
     end
 end
 
--- Internal helper: snapshot-on-iterate dispatch (copied from Bus.lua;
--- design note section 6 deliberately defers extraction to Dispatcher).
--- Callbacks receive `(store, ...)` per design note section 5.
+-- Internal helper: snapshot-on-iterate dispatch via the shared Dispatcher
+-- seam. Callbacks receive `(store, ...)` per design note section 5 -- the
+-- `self`-prepend lives in the invoke closure because it is Store's
+-- domain-specific arg shape, not Dispatcher's concern.
 local function dispatch(self, event, ...)
     if self._disposed then return end
     local list = self._subs[event]
     if not list then return end
-
-    self._dispatchDepth[event] = (self._dispatchDepth[event] or 0) + 1
-    local _, SecureCall = resolveDeps()
-    local len = #list
-    for i = 1, len do
-        local entry = list[i]
-        if not entry.cancelled then
-            SecureCall:Invoke(entry.cb, self, ...)
-        end
-    end
-    self._dispatchDepth[event] = self._dispatchDepth[event] - 1
-
-    if self._dispatchDepth[event] == 0 then
-        self._dispatchDepth[event] = nil
-        if self._sweepQueued[event] then
-            self._sweepQueued[event] = nil
-            sweep(self, event)
-        end
-    end
+    local _, SecureCall, Dispatcher = resolveDeps()
+    local n = select("#", ...)
+    local args = { ... }
+    Dispatcher.Run(self._depthBag, event, list, function(entry)
+        SecureCall:Invoke(entry.cb, self, unpack(args, 1, n))
+    end, function(k) sweep(self, k) end)
 end
 
 -- Internal helper: build the Subscription handle (mirrors Bus).
 local function buildSubscription(self, event, entry)
-    local Subscription = resolveDeps()
+    local Subscription, _, Dispatcher = resolveDeps()
     return Subscription.New(function()
         entry.cancelled = true
-        if (self._dispatchDepth[event] or 0) == 0 then
-            sweep(self, event)
-        else
-            self._sweepQueued[event] = true
-        end
+        Dispatcher.RequestSweep(self._depthBag, event, function(k)
+            sweep(self, k)
+        end)
     end)
 end
 
@@ -304,7 +293,7 @@ end
 function Store:Open(addon, spec)
     validateAddon("Open", addon)
     validateSpec(spec)
-    resolveDeps()  -- ensure deps present before constructing
+    local _, _, Dispatcher = resolveDeps()
 
     local svName = spec.savedVariable
     local sv = _G[svName]
@@ -355,8 +344,7 @@ function Store:Open(addon, spec)
         _profileMode = profileMode,
         _subs = {},
         _disposed = false,
-        _dispatchDepth = {},
-        _sweepQueued = {},
+        _depthBag = Dispatcher.NewDepthBag(),
     }, Store)
 end
 
@@ -564,8 +552,8 @@ function Store:Dispose()
         end
     end
     self._subs = {}
-    self._dispatchDepth = {}
-    self._sweepQueued = {}
+    local _, _, Dispatcher = resolveDeps()
+    self._depthBag = Dispatcher.NewDepthBag()
     self._addon = nil
     self._sv = nil
     self._defaults = nil

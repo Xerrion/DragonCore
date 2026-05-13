@@ -53,6 +53,7 @@ local function resolveDeps()
     local secureCall = DragonCore.SecureCall
     local capabilities = DragonCore.Capabilities
     local serializer = DragonCore._AddonChannelSerializer
+    local dispatcher = DragonCore.Dispatcher
     if not subscription then
         error("DragonCore.AddonChannel: DragonCore.Subscription is not loaded", 3)
     end
@@ -65,7 +66,10 @@ local function resolveDeps()
     if not serializer then
         error("DragonCore.AddonChannel: DragonCore._AddonChannelSerializer is not loaded", 3)
     end
-    return subscription, secureCall, capabilities, serializer
+    if not dispatcher then
+        error("DragonCore.AddonChannel: DragonCore.Dispatcher is not loaded", 3)
+    end
+    return subscription, secureCall, capabilities, serializer, dispatcher
 end
 
 -------------------------------------------------------------------------------
@@ -158,8 +162,7 @@ local registeredPrefixes = {}
 ---@field private _prefix string
 ---@field private _subs table<string, table[]>
 ---@field private _disposed boolean
----@field private _dispatchDepth table<string, integer>
----@field private _sweepQueued table<string, boolean>
+---@field private _depthBag DragonCore.Dispatcher.DepthBag
 local AddonChannel = {}
 AddonChannel.__index = AddonChannel
 
@@ -178,45 +181,31 @@ local function sweep(self, topic)
     end
 end
 
--- Internal helper: snapshot-on-iterate dispatch for `topic` (copied from
--- Bus.lua; design note section 7 deliberately defers extraction).
+-- Internal helper: snapshot-on-iterate dispatch for `topic` via the shared
+-- Dispatcher seam. Callback receives `(decoded, sender, distribution)` per
+-- design note section 5.
 local function dispatch(self, topic, ...)
     if self._disposed then return end
     local list = self._subs[topic]
     if not list then return end
-
-    self._dispatchDepth[topic] = (self._dispatchDepth[topic] or 0) + 1
-    local _, SecureCall = resolveDeps()
-    local len = #list
-    for i = 1, len do
-        local entry = list[i]
-        if not entry.cancelled then
-            SecureCall:Invoke(entry.cb, ...)
-        end
-    end
-    self._dispatchDepth[topic] = self._dispatchDepth[topic] - 1
-
-    if self._dispatchDepth[topic] == 0 then
-        self._dispatchDepth[topic] = nil
-        if self._sweepQueued[topic] then
-            self._sweepQueued[topic] = nil
-            sweep(self, topic)
-        end
-    end
+    local _, SecureCall, _, _, Dispatcher = resolveDeps()
+    local n = select("#", ...)
+    local args = { ... }
+    Dispatcher.Run(self._depthBag, topic, list, function(entry)
+        SecureCall:Invoke(entry.cb, unpack(args, 1, n))
+    end, function(k) sweep(self, k) end)
 end
 
--- Internal helper: build the Subscription handle. Mirrors Bus's pattern --
--- onCancel flips entry.cancelled and either sweeps eagerly (outside
--- dispatch) or queues a deferred sweep (during dispatch).
+-- Internal helper: build the Subscription handle. onCancel flips
+-- entry.cancelled and asks the Dispatcher to either sweep eagerly (outside
+-- dispatch) or queue a deferred sweep (during dispatch).
 local function buildSubscription(self, topic, entry)
-    local Subscription = resolveDeps()
+    local Subscription, _, _, _, Dispatcher = resolveDeps()
     return Subscription.New(function()
         entry.cancelled = true
-        if (self._dispatchDepth[topic] or 0) == 0 then
-            sweep(self, topic)
-        else
-            self._sweepQueued[topic] = true
-        end
+        Dispatcher.RequestSweep(self._depthBag, topic, function(k)
+            sweep(self, k)
+        end)
     end)
 end
 
@@ -268,7 +257,7 @@ end
 function AddonChannel:Open(addon, prefix)
     validateAddon("Open", addon)
     validatePrefix(prefix)
-    local _, _, _, serializer = resolveDeps()
+    local _, _, _, serializer, Dispatcher = resolveDeps()
 
     local addonChannels = channels[addon.name]
     if addonChannels then
@@ -288,8 +277,7 @@ function AddonChannel:Open(addon, prefix)
         _prefix = prefix,
         _subs = {},
         _disposed = false,
-        _dispatchDepth = {},
-        _sweepQueued = {},
+        _depthBag = Dispatcher.NewDepthBag(),
     }, AddonChannel)
 
     attachFrame(instance, serializer)
@@ -389,8 +377,8 @@ function AddonChannel:Dispose()
         end
     end
     self._subs = {}
-    self._dispatchDepth = {}
-    self._sweepQueued = {}
+    local _, _, _, _, Dispatcher = resolveDeps()
+    self._depthBag = Dispatcher.NewDepthBag()
 
     if self._frame then
         self._frame:UnregisterAllEvents()

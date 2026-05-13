@@ -20,6 +20,7 @@ describe("DragonCore.Lifecycle", function()
     local function loadLifecycle()
         dofile("Core/Subscription.lua")
         dofile("Core/SecureCall.lua")
+        dofile("Core/Dispatcher.lua")
         dofile("Core/Lifecycle/Lifecycle.lua")
         DragonCore = LibStub("DragonCore-1.0")
         Lifecycle = DragonCore.Lifecycle

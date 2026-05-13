@@ -19,6 +19,7 @@ local function loadStack(preGlobals)
     dofile("Core/SecureCall.lua")
     dofile("Core/Capabilities.lua")
     dofile("Core/AddonChannel/Serializer.lua")
+    dofile("Core/Dispatcher.lua")
     dofile("Core/AddonChannel.lua")
     return LibStub("DragonCore-1.0")
 end
@@ -588,6 +589,7 @@ describe("DragonCore.AddonChannel lockdown gating", function()
         dofile("Core/SecureCall.lua")
         dofile("Core/Capabilities.lua")
         dofile("Core/AddonChannel/Serializer.lua")
+        dofile("Core/Dispatcher.lua")
         dofile("Core/AddonChannel.lua")
 
         AddonChannel = LibStub("DragonCore-1.0").AddonChannel
