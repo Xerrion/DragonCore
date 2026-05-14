@@ -1,9 +1,9 @@
 -------------------------------------------------------------------------------
 -- Settings.lua
 -- DragonCore declarative settings registry. Library-global (NOT per-addon
--- instance): one schema per addon.name, picked up by the runtime-selected
--- renderer (Renderer_Modern vs Renderer_Legacy). Three public methods:
--- :Register, :Open, :Refresh -- no :On, no :Dispose, no Settings:New.
+-- instance): one schema per addon.name, rendered by Renderer_Modern. Three
+-- public methods: :Register, :Open, :Refresh -- no :On, no :Dispose, no
+-- Settings:New.
 --
 -- Public surface (ADR-0003 section B.4 / design note section 1):
 --   :Register(addon, schema)  -> { ok, errors? }
@@ -16,8 +16,16 @@
 -- so the consumer can inspect and decide; argument-shape errors and
 -- :Open / :Refresh "not registered" cases still raise.
 --
--- Re-registration (ADR R-4 line 852): a second :Register for the same addon
--- forwards to the Refresh codepath. Blizzard's RegisterAddOnCategory is
+-- Capability precondition (ADR-0002): when Capabilities.settingsAPI is
+-- false, :Register fast-errors at our boundary with a clear message rather
+-- than crashing inside Blizzard code. Soft-failure mode (ADR-0002 Risk
+-- Mitigation): even when the capability flag is true, Renderer_Modern may
+-- return nil if Blizzard's Settings.* throws on a partial-stub Classic
+-- flavor; the registry records `failed = true` and :Open / :Refresh
+-- no-op with a warning instead of erroring, so slash commands still work.
+--
+-- Re-registration (ADR-0003 "Handle shape"): a second :Register for the same
+-- addon forwards to the Refresh codepath. Blizzard's RegisterAddOnCategory is
 -- one-shot per category; the panel frame and category handle are reused.
 --
 -- Slash commands (ADR line 476): v0 implements `<no-args>` and `open` as
@@ -26,8 +34,8 @@
 -- per design note conflict log #3). `<subgroup>` navigation is deferred.
 --
 -- Pillar 5 (Atomic Predictability): Settings.lua is pure registry CRUD --
--- no frames, no events. Frame creation lives in Renderer_Modern.lua and
--- Renderer_Legacy.lua (ADR line 880 RISK acknowledged).
+-- no frames, no events. Frame creation lives in Renderer_Modern.lua
+-- (ADR-0003 "Pillar check" RISK acknowledged).
 --
 -- Supported versions: Retail, MoP Classic, TBC Anniversary
 -------------------------------------------------------------------------------
@@ -45,10 +53,8 @@ if not DragonCore then return end
 local SETTINGS_OWN_ADDON = { name = "DragonCore" }
 
 -------------------------------------------------------------------------------
--- Lazy dependency resolution. Capabilities IS listed (design note section 2
--- enforces it as a layering hop even though v0 probes _G.Settings directly
--- because Capabilities.settingsAPI is not yet exposed by the frozen
--- Capabilities table -- see engineer Notes for the follow-up).
+-- Lazy dependency resolution. Capabilities is required so :Register can
+-- precondition-check caps.settingsAPI before invoking the renderer.
 -------------------------------------------------------------------------------
 
 local function resolveDeps()
@@ -56,7 +62,6 @@ local function resolveDeps()
     local locale = DragonCore.Locale
     local secureCall = DragonCore.SecureCall
     local rendererModern = DragonCore._SettingsRendererModern
-    local rendererLegacy = DragonCore._SettingsRendererLegacy
     if not caps then
         error("DragonCore.Settings: DragonCore.Capabilities is not loaded", 3)
     end
@@ -69,10 +74,7 @@ local function resolveDeps()
     if not rendererModern then
         error("DragonCore.Settings: DragonCore._SettingsRendererModern is not loaded", 3)
     end
-    if not rendererLegacy then
-        error("DragonCore.Settings: DragonCore._SettingsRendererLegacy is not loaded", 3)
-    end
-    return caps, locale, secureCall, rendererModern, rendererLegacy
+    return caps, locale, secureCall, rendererModern
 end
 
 -------------------------------------------------------------------------------
@@ -91,9 +93,10 @@ local VALID_NODE_TYPES = {
     description = true,
 }
 
--- Value nodes require both get and set. The deferred trio (color/input)
--- still validates as value-shaped per ADR R-1 line 849 -- schemas authored
--- against the v0 contract migrate cleanly when the renderer fills in.
+-- Value nodes require both get and set. The placeholder set in
+-- Renderer_Modern (`select`, `input`, `color` -- ADR-0003 v0 widget
+-- contract) still validates here as value-shaped: schemas authored against
+-- the v0 contract migrate cleanly when each deferred type lands.
 local VALUE_NODE_TYPES = {
     toggle = true,
     slider = true,
@@ -239,25 +242,27 @@ end
 --   registry[addon.name] = {
 --       addon    = DragonCore.Addon,
 --       schema   = DragonCore.Settings.Schema,
---       renderer = Renderer_Modern | Renderer_Legacy,
---       handle   = renderer-specific handle table (panel frame + category),
+--       renderer = Renderer_Modern | nil  (nil when failed = true),
+--       handle   = renderer-specific handle table | nil,
 --       slashKey = uppercase addon.name (when slashCommands wired) or nil,
+--       failed   = true when the renderer soft-failed (ADR-0002); :Open
+--                  and :Refresh no-op with a warning for these entries.
 --   }
 -------------------------------------------------------------------------------
 
 local registry = {}
 
--- Internal helper: pick renderer at :Register time by probing _G.Settings.
--- Design note section 2 cites Capabilities.settingsAPI as the canonical
--- probe; the frozen Capabilities table does not expose that flag in v0, so
--- we inline the same probe (ADR section C line 613).
-local function pickRenderer()
-    local _, _, _, rendererModern, rendererLegacy = resolveDeps()
-    if type(_G.Settings) == "table"
-        and type(_G.Settings.RegisterAddOnCategory) == "function" then
-        return rendererModern
+-- Internal helper: precondition the modern Settings API at :Register time.
+-- ADR-0002 collapsed the two-renderer model to a single Modern renderer;
+-- this gate replaces the prior pickRenderer selection. Fast-error here is
+-- preferred to a deep Blizzard nil-call trace.
+local function requireSettingsAPI()
+    local caps = resolveDeps()
+    if not caps.settingsAPI then
+        error("DragonCore.Settings: this client does not expose the modern "
+            .. "Settings API (Patch 10.0.0+ engine required). Cannot register "
+            .. "options panel.", 3)
     end
-    return rendererLegacy
 end
 
 -------------------------------------------------------------------------------
@@ -337,7 +342,8 @@ end
 -------------------------------------------------------------------------------
 
 ---Register a schema for `addon`. On re-call for the same addon, forwards to
----the :Refresh codepath per ADR R-4. Returns a typed result; on `ok =
+---the :Refresh codepath per ADR-0003 ("Handle shape" / re-registration).
+---Returns a typed result; on `ok =
 ---false`, no registration takes place (or no re-render, in the re-call
 ---case) and `errors` enumerates the validation failures.
 ---
@@ -359,17 +365,42 @@ function Settings:Register(addon, schema)
 
     local existing = registry[addon.name]
     if existing then
-        -- R-4: re-register is refresh. Update stored schema, hand off to
-        -- the renderer's Refresh path so RegisterAddOnCategory is NOT
-        -- called a second time (Blizzard rejects re-registration).
+        -- ADR-0003 re-register-as-refresh: update stored schema, hand off
+        -- to the renderer's Refresh path so RegisterAddOnCategory is NOT
+        -- called a second time (Blizzard rejects re-registration). If the
+        -- prior :Register soft-failed we still update the stored schema,
+        -- wire slash commands stay intact, and we return ok = true; there
+        -- is no panel to re-render.
         existing.schema = schema
-        existing.renderer:Refresh(existing.handle, schema)
+        if not existing.failed then
+            existing.renderer:Refresh(existing.handle, schema)
+        end
         return { ok = true }
     end
 
-    local renderer = pickRenderer()
+    -- Fast-fail precondition: refuse to invoke Blizzard's Settings code on a
+    -- client that does not expose the modern API. ADR-0002 collapsed the
+    -- legacy renderer fallback; the only honest answer here is to error.
+    requireSettingsAPI()
+
+    local _, _, _, renderer = resolveDeps()
     local handle = renderer:Render(addon, schema)
     local slashKey = wireSlashCommands(addon, schema.slashCommands)
+
+    if handle == nil then
+        -- Soft-failure path (ADR-0002 Risk Mitigation): the renderer's
+        -- pcall caught a Blizzard-side throw. Slash commands remain wired;
+        -- :Open / :Refresh no-op with a one-line warning.
+        registry[addon.name] = {
+            addon = addon,
+            schema = schema,
+            renderer = nil,
+            handle = nil,
+            slashKey = slashKey,
+            failed = true,
+        }
+        return { ok = true }
+    end
 
     registry[addon.name] = {
         addon = addon,
@@ -382,7 +413,8 @@ function Settings:Register(addon, schema)
 end
 
 ---Open the addon's settings panel. Raises if the addon has not been
----registered.
+---registered. When the registry entry is `failed` (renderer soft-failure on
+---a partial-stub Classic flavor), this is a no-op with a one-line warning.
 ---@param addon DragonCore.Addon
 function Settings:Open(addon)
     validateAddon("Open", addon)
@@ -392,13 +424,21 @@ function Settings:Open(addon)
         error("DragonCore.Settings:Open: addon '" .. addon.name ..
             "' is not registered", 3)
     end
+    if entry.failed then
+        if type(_G.print) == "function" then
+            _G.print("|cffff8000DragonCore:|r options panel for '" .. addon.name
+                .. "' is unavailable on this client (registration soft-failed).")
+        end
+        return
+    end
     entry.renderer:Open(entry.handle)
 end
 
 ---Re-render an already-registered addon's panel. Re-validates the stored
 ---schema (so a consumer who mutated `entry.schema` post-Register gets a
 ---typed result); if validation fails the prior rendering is left in place.
----Raises if `addon` has not been registered.
+---Raises if `addon` has not been registered. When the registry entry is
+---`failed`, returns ok = true without re-rendering (there is no panel).
 ---@param addon DragonCore.Addon
 ---@return DragonCore.Settings.RegisterResult
 function Settings:Refresh(addon)
@@ -413,6 +453,14 @@ function Settings:Refresh(addon)
     local errors = validateSchemaContent(entry.schema)
     if #errors > 0 then
         return { ok = false, errors = errors }
+    end
+
+    if entry.failed then
+        if type(_G.print) == "function" then
+            _G.print("|cffff8000DragonCore:|r options panel for '" .. addon.name
+                .. "' is unavailable on this client (registration soft-failed).")
+        end
+        return { ok = true }
     end
 
     entry.renderer:Refresh(entry.handle, entry.schema)

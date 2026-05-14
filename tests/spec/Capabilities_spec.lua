@@ -7,7 +7,9 @@
 
 local bootstrap = dofile("tests/spec/bootstrap.lua")
 
--- Canonical retail Midnight client (Interface 120005, build 67235).
+-- Canonical retail Midnight client (Interface 120005, build 67235). The
+-- Settings stub includes all three functions Renderer_Modern will call;
+-- caps.settingsAPI is a pure presence probe (ADR-0002).
 local function retailMidnightGlobals()
     return {
         WOW_PROJECT_ID = 1,
@@ -20,6 +22,11 @@ local function retailMidnightGlobals()
         GetBuildInfo = function() return "12.0.5", "67235", "20251023", 120005 end,
         C_RestrictedActions = {},
         Enum = { SendAddonMessageResult = { AddOnMessageLockdown = 0 } },
+        Settings = {
+            RegisterCanvasLayoutCategory = function() end,
+            RegisterVerticalLayoutCategory = function() end,
+            RegisterAddOnCategory = function() end,
+        },
     }
 end
 
@@ -40,6 +47,11 @@ local function retailPreMidnightGlobals()
     }
 end
 
+-- MoP Classic 5.5.x: non-mainline project ID with the modern Settings API
+-- present (TBC Anniversary shipping Edit Mode confirms Classic flavors run
+-- the modern UI engine). ADR-0002 relaxed the settingsAPI probe to drop
+-- the projectMainline / interfaceVersion gates, so this must evaluate
+-- true.
 local function mopClassicGlobals()
     return {
         WOW_PROJECT_ID = 15,
@@ -50,11 +62,17 @@ local function mopClassicGlobals()
         WOW_PROJECT_MISTS_CLASSIC = 15,
         WOW_PROJECT_CLASSIC = 2,
         GetBuildInfo = function() return "5.5.3", "55000", "20250901", 50503 end,
-        -- No retail-only namespaces.
         Enum = {},
+        Settings = {
+            RegisterCanvasLayoutCategory = function() end,
+            RegisterVerticalLayoutCategory = function() end,
+            RegisterAddOnCategory = function() end,
+        },
     }
 end
 
+-- TBC Anniversary 2.5.5+: non-mainline project ID, modern Settings API
+-- present. Same relaxed-gate semantics as MoP Classic.
 local function tbcAnniversaryGlobals()
     return {
         WOW_PROJECT_ID = 5,
@@ -66,6 +84,11 @@ local function tbcAnniversaryGlobals()
         WOW_PROJECT_CLASSIC = 2,
         GetBuildInfo = function() return "2.5.5", "22000", "20250601", 20505 end,
         Enum = {},
+        Settings = {
+            RegisterCanvasLayoutCategory = function() end,
+            RegisterVerticalLayoutCategory = function() end,
+            RegisterAddOnCategory = function() end,
+        },
     }
 end
 
@@ -91,6 +114,50 @@ local function midnightBuildPreMidnightInterfaceGlobals()
     }
 end
 
+-- Partial-stub Classic: _G.Settings is present with only RegisterAddOnCategory
+-- (the pre-relaxed signal). With ADR-0002's three-function AND, this must
+-- fail closed because the canvas/vertical functions are missing.
+local function partialStubSettingsGlobals()
+    return {
+        WOW_PROJECT_ID = 5,
+        WOW_PROJECT_MAINLINE = 1,
+        WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5,
+        WOW_PROJECT_WRATH_CLASSIC = 11,
+        WOW_PROJECT_CATACLYSM_CLASSIC = 14,
+        WOW_PROJECT_MISTS_CLASSIC = 15,
+        WOW_PROJECT_CLASSIC = 2,
+        GetBuildInfo = function() return "2.5.5", "22000", "20250601", 20505 end,
+        Enum = {},
+        Settings = { RegisterAddOnCategory = function() end },
+    }
+end
+
+-- Build a globals factory that omits exactly one of the three Settings
+-- functions Renderer_Modern requires, leaving the other two present. Used
+-- to assert that the relaxed probe still fails closed on missing-function
+-- partial stubs.
+local function settingsMissingOne(omit)
+    local s = {
+        RegisterCanvasLayoutCategory = function() end,
+        RegisterVerticalLayoutCategory = function() end,
+        RegisterAddOnCategory = function() end,
+    }
+    s[omit] = nil
+    return {
+        WOW_PROJECT_ID = 1,
+        WOW_PROJECT_MAINLINE = 1,
+        WOW_PROJECT_BURNING_CRUSADE_CLASSIC = 5,
+        WOW_PROJECT_WRATH_CLASSIC = 11,
+        WOW_PROJECT_CATACLYSM_CLASSIC = 14,
+        WOW_PROJECT_MISTS_CLASSIC = 15,
+        WOW_PROJECT_CLASSIC = 2,
+        GetBuildInfo = function() return "12.0.5", "67235", "20251023", 120005 end,
+        C_RestrictedActions = {},
+        Enum = { SendAddonMessageResult = { AddOnMessageLockdown = 0 } },
+        Settings = s,
+    }
+end
+
 local function loadCapabilities(globals)
     bootstrap.reset_globals(globals)
     bootstrap.reload_libstub()
@@ -107,6 +174,7 @@ describe("DragonCore.Capabilities", function()
         assert.is_true(caps.addonMessageLockdown)
         assert.is_true(caps.projectMainline)
         assert.is_false(caps.projectClassic)
+        assert.is_true(caps.settingsAPI)
         assert.are.equal(67235, caps.buildNumber)
         assert.are.equal(120005, caps.interfaceVersion)
     end)
@@ -122,24 +190,66 @@ describe("DragonCore.Capabilities", function()
         assert.are.equal(60000, caps.buildNumber)
     end)
 
-    it("detects MoP Classic: projectClassic, no retail surfaces", function()
-        local caps = loadCapabilities(mopClassicGlobals())
-        assert.is_false(caps.cleuRestricted)
-        assert.is_false(caps.restrictedActions)
-        assert.is_false(caps.frameEventCallback)
-        assert.is_false(caps.addonMessageLockdown)
-        assert.is_false(caps.projectMainline)
-        assert.is_true(caps.projectClassic)
-        assert.are.equal(55000, caps.buildNumber)
-        assert.are.equal(50503, caps.interfaceVersion)
+    it("detects MoP Classic: projectClassic + relaxed settingsAPI accepts it",
+        function()
+            local caps = loadCapabilities(mopClassicGlobals())
+            assert.is_false(caps.cleuRestricted)
+            assert.is_false(caps.restrictedActions)
+            assert.is_false(caps.frameEventCallback)
+            assert.is_false(caps.addonMessageLockdown)
+            assert.is_false(caps.projectMainline)
+            assert.is_true(caps.projectClassic)
+            -- ADR-0002: relaxed probe is pure three-function presence; Classic
+            -- flavors that ship the modern Settings namespace qualify.
+            assert.is_true(caps.settingsAPI)
+            assert.are.equal(55000, caps.buildNumber)
+            assert.are.equal(50503, caps.interfaceVersion)
+        end)
+
+    it("detects TBC Anniversary: projectClassic + relaxed settingsAPI accepts it",
+        function()
+            local caps = loadCapabilities(tbcAnniversaryGlobals())
+            assert.is_false(caps.cleuRestricted)
+            assert.is_false(caps.projectMainline)
+            assert.is_true(caps.projectClassic)
+            assert.is_true(caps.settingsAPI)
+            assert.are.equal(22000, caps.buildNumber)
+        end)
+
+    it("rejects settingsAPI when _G.Settings is absent", function()
+        -- retailPreMidnightGlobals does not include _G.Settings; the
+        -- type check on _G.Settings must fail closed.
+        local caps = loadCapabilities(retailPreMidnightGlobals())
+        assert.is_true(caps.projectMainline)
+        assert.is_false(caps.settingsAPI)
     end)
 
-    it("detects TBC Anniversary: projectClassic, no retail surfaces", function()
-        local caps = loadCapabilities(tbcAnniversaryGlobals())
-        assert.is_false(caps.cleuRestricted)
-        assert.is_false(caps.projectMainline)
-        assert.is_true(caps.projectClassic)
-        assert.are.equal(22000, caps.buildNumber)
+    it("rejects settingsAPI on a partial-stub Classic (only RegisterAddOnCategory)",
+        function()
+            -- Mirrors the original TBC Anniversary crash signal: the legacy
+            -- pre-relaxed disambiguator was RegisterVerticalLayoutCategory.
+            -- The relaxed three-function AND still rejects this case
+            -- because the canvas/vertical functions are missing.
+            local caps = loadCapabilities(partialStubSettingsGlobals())
+            assert.is_true(caps.projectClassic)
+            assert.is_false(caps.settingsAPI)
+        end)
+
+    it("rejects settingsAPI when RegisterCanvasLayoutCategory is missing",
+        function()
+            local caps = loadCapabilities(settingsMissingOne("RegisterCanvasLayoutCategory"))
+            assert.is_false(caps.settingsAPI)
+        end)
+
+    it("rejects settingsAPI when RegisterVerticalLayoutCategory is missing",
+        function()
+            local caps = loadCapabilities(settingsMissingOne("RegisterVerticalLayoutCategory"))
+            assert.is_false(caps.settingsAPI)
+        end)
+
+    it("rejects settingsAPI when RegisterAddOnCategory is missing", function()
+        local caps = loadCapabilities(settingsMissingOne("RegisterAddOnCategory"))
+        assert.is_false(caps.settingsAPI)
     end)
 
     it("regression: midnight client build with pre-Midnight interface does NOT trigger cleuRestricted", function()

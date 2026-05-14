@@ -1,11 +1,10 @@
 -------------------------------------------------------------------------------
 -- Settings_spec.lua
--- Busted spec for DragonCore.Settings. Covers both renderer flavors (modern
--- _G.Settings + legacy InterfaceOptions) via Mock:SetSettingsAPI(true|false).
--- Load order (design note section 2): Subscription -> SecureCall ->
--- Capabilities -> Locale -> Renderer_Modern -> Renderer_Legacy -> Settings,
--- then Locales/enUS.lua so the chrome strings are registered against the
--- synthetic { name = "DragonCore" } addon.
+-- Busted spec for DragonCore.Settings. Exercises the single Modern renderer
+-- (ADR-0002 collapsed the two-renderer model). Load order (design note
+-- section 2): Subscription -> SecureCall -> Capabilities -> Locale ->
+-- Renderer_Modern -> Settings, then Locales/enUS.lua so the chrome strings
+-- are registered against the synthetic { name = "DragonCore" } addon.
 -------------------------------------------------------------------------------
 
 local bootstrap = dofile("tests/spec/bootstrap.lua")
@@ -41,19 +40,58 @@ describe("DragonCore.Settings", function()
         return schema
     end
 
+    -- Nil the modern Settings API and re-detect Capabilities so the
+    -- caps.settingsAPI flag flips false; the next :Register call must
+    -- fast-error at the precondition gate (ADR-0002). Re-running
+    -- Capabilities.lua reassigns DragonCore.Capabilities to a fresh frozen
+    -- table; Settings.lua reads it lazily on every dispatch, so no Settings
+    -- reload is required.
+    local function useStubbedSettingsAPI()
+        _G.Settings = nil
+        dofile("Core/Capabilities.lua")
+    end
+
+    -- Install a Settings table where one of the three required functions
+    -- raises when called. Exercises the renderer's pcall soft-failure path.
+    -- Capabilities.settingsAPI must still report true (the symbols exist as
+    -- functions); the throw happens when Blizzard-side code actually runs.
+    local function installThrowingSettings(which)
+        local function throwing() error("boom") end
+        _G.Settings.RegisterCanvasLayoutCategory =
+            which == "canvas" and throwing
+            or _G.Settings.RegisterCanvasLayoutCategory
+        _G.Settings.RegisterAddOnCategory =
+            which == "addon" and throwing
+            or _G.Settings.RegisterAddOnCategory
+        -- RegisterVerticalLayoutCategory must remain a function so the
+        -- capability probe stays true; the renderer never calls it.
+    end
+
     before_each(function()
         bootstrap.reset_globals(nil)
         bootstrap.reload_libstub()
 
         mock = wow_mock.new()
-        mock:Install()  -- installs _G.Settings AND legacy entry points by default
+        mock:Install()  -- installs _G.Settings with the three modern functions
+
+        -- Default environment: Mainline retail with the modern Settings API
+        -- complete. RegisterVerticalLayoutCategory is the third function the
+        -- capability probe requires; the mock omits it because production
+        -- code never calls it, so we install a stub here. Set BEFORE
+        -- Capabilities.lua dofile so the frozen caps.settingsAPI evaluates
+        -- true.
+        _G.WOW_PROJECT_ID = 1
+        _G.WOW_PROJECT_MAINLINE = 1
+        _G.GetBuildInfo = function()
+            return "12.0.5", "60000", "Nov 13 2026", 120005
+        end
+        _G.Settings.RegisterVerticalLayoutCategory = function() end
 
         dofile("Core/Subscription.lua")
         dofile("Core/SecureCall.lua")
         dofile("Core/Capabilities.lua")
         dofile("Core/Locale.lua")
         dofile("Core/Settings/Renderer_Modern.lua")
-        dofile("Core/Settings/Renderer_Legacy.lua")
         dofile("Core/Settings/Settings.lua")
         dofile("Locales/enUS.lua")
 
@@ -313,13 +351,21 @@ describe("DragonCore.Settings", function()
     ---------------------------------------------------------------------------
 
     describe(":Register happy path (modern renderer)", function()
-        it("returns { ok = true } and calls Settings.RegisterAddOnCategory", function()
+        it("returns { ok = true } and registers via the modern Settings API", function()
             local result = Settings:Register(wow_mock.fakeAddon(), makeSchema())
             assert.is_true(result.ok)
             local cats = mock:RegisteredCategories()
-            assert.equals(1, #cats)
-            assert.equals("Settings.RegisterAddOnCategory", cats[1].api)
+            -- Modern path is two calls in order: wrap the renderer-owned
+            -- Frame as a canvas category, then install that category under
+            -- the AddOns group. RegisterAddOnCategory is single-argument
+            -- (the category object from the previous call), so its recorded
+            -- `name` is nil and its `panel` is the prior call's category.
+            -- See Renderer_Modern.lua + ADR-0003 ("Handle shape").
+            assert.equals(2, #cats)
+            assert.equals("Settings.RegisterCanvasLayoutCategory", cats[1].api)
             assert.equals("TestAddon Settings", cats[1].name)
+            assert.equals("Settings.RegisterAddOnCategory", cats[2].api)
+            assert.equals(cats[1].category, cats[2].panel)
         end)
 
         it("creates only unnamed frames (ADR taint contract)", function()
@@ -348,7 +394,7 @@ describe("DragonCore.Settings", function()
             assert.equals(1, seen)
         end)
 
-        it("does NOT invoke get for ADR R-1 placeholder node types", function()
+        it("does NOT invoke get for ADR-0003 placeholder node types", function()
             local toggled, colored, inputted = 0, 0, 0
             Settings:Register(wow_mock.fakeAddon(), makeSchema({
                 root = {
@@ -404,48 +450,115 @@ describe("DragonCore.Settings", function()
     end)
 
     ---------------------------------------------------------------------------
-    -- :Register happy path -- legacy renderer
+    -- :Register precondition (ADR-0002): when Capabilities.settingsAPI is
+    -- false the call must fast-error at our boundary rather than fall
+    -- through to a deleted legacy renderer.
     ---------------------------------------------------------------------------
 
-    describe(":Register happy path (legacy renderer)", function()
+    describe(":Register precondition (caps.settingsAPI = false)", function()
         before_each(function()
-            mock:SetSettingsAPI(false)
+            useStubbedSettingsAPI()
         end)
 
-        it("falls through to InterfaceOptions_AddCategory when _G.Settings is nil",
+        it("raises with the precondition error message when _G.Settings is nil",
             function()
-                local result = Settings:Register(wow_mock.fakeAddon(), makeSchema())
-                assert.is_true(result.ok)
-                local cats = mock:RegisteredCategories()
-                assert.equals(1, #cats)
-                assert.equals("InterfaceOptions_AddCategory", cats[1].api)
-                assert.equals("TestAddon Settings", cats[1].name)
+                local ok, err = pcall(function()
+                    Settings:Register(wow_mock.fakeAddon(), makeSchema())
+                end)
+                assert.is_false(ok)
+                assert.is_truthy(err:find(
+                    "this client does not expose the modern Settings API",
+                    1, true))
             end)
 
-        it("invokes the value-node get through SecureCall on legacy too", function()
-            local seen = 0
-            Settings:Register(wow_mock.fakeAddon(), makeSchema({
-                root = {
-                    type = "group", label = "r",
-                    children = {
-                        {
-                            type = "slider", label = "s",
-                            min = 0, max = 10, step = 1,
-                            get = function() seen = seen + 1; return 5 end,
-                            set = function(_v) end,
-                        },
-                    },
-                },
-            }))
-            assert.equals(1, seen)
+        it("does not register the addon when the precondition fails", function()
+            local addon = wow_mock.fakeAddon()
+            pcall(function() Settings:Register(addon, makeSchema()) end)
+            local opened = pcall(function() Settings:Open(addon) end)
+            assert.is_false(opened)
         end)
     end)
 
     ---------------------------------------------------------------------------
-    -- :Register re-call -> Refresh (ADR R-4)
+    -- Renderer soft-failure (ADR-0002 Risk Mitigation): even when the
+    -- capability probe is true, the renderer wraps Settings.* in pcall so
+    -- a partial-stub Classic flavor where Blizzard's side throws degrades
+    -- to a soft failure rather than crashing the addon.
     ---------------------------------------------------------------------------
 
-    describe(":Register re-call (ADR R-4)", function()
+    describe(":Register soft-failure (renderer pcall)", function()
+        it("marks the entry failed when RegisterCanvasLayoutCategory throws",
+            function()
+                installThrowingSettings("canvas")
+                local printed
+                _G.print = function(s) printed = s end
+                local result = Settings:Register(wow_mock.fakeAddon(), makeSchema())
+                _G.print = nil
+                -- :Register returns ok = true: the addon survives, just
+                -- without a panel. The warning is the user-visible signal.
+                assert.is_true(result.ok)
+                assert.is_string(printed)
+                assert.is_truthy(printed:find("DragonCore", 1, true))
+                assert.is_truthy(printed:find("Slash commands remain available", 1, true))
+            end)
+
+        it("marks the entry failed when RegisterAddOnCategory throws", function()
+            installThrowingSettings("addon")
+            local printed
+            _G.print = function(s) printed = s end
+            local result = Settings:Register(wow_mock.fakeAddon(), makeSchema())
+            _G.print = nil
+            assert.is_true(result.ok)
+            assert.is_string(printed)
+            assert.is_truthy(printed:find("Slash commands remain available", 1, true))
+        end)
+
+        it(":Open is a no-op for a failed entry (no panel to open)", function()
+            installThrowingSettings("canvas")
+            local addon = wow_mock.fakeAddon()
+            _G.print = function() end
+            Settings:Register(addon, makeSchema())
+            mock:ClearOpenedCategory()
+            local opened
+            _G.print = function(s) opened = s end
+            -- Must NOT raise; must NOT call Settings.OpenToCategory.
+            assert.has_no_errors(function() Settings:Open(addon) end)
+            _G.print = nil
+            assert.is_nil(mock:OpenedCategory())
+            assert.is_string(opened)
+            assert.is_truthy(opened:find("unavailable", 1, true))
+        end)
+
+        it(":Refresh returns ok = true and warns for a failed entry", function()
+            installThrowingSettings("canvas")
+            local addon = wow_mock.fakeAddon()
+            _G.print = function() end
+            Settings:Register(addon, makeSchema())
+            local warned
+            _G.print = function(s) warned = s end
+            local result = Settings:Refresh(addon)
+            _G.print = nil
+            assert.is_true(result.ok)
+            assert.is_string(warned)
+            assert.is_truthy(warned:find("unavailable", 1, true))
+        end)
+
+        it("keeps slash commands wired through soft-failure", function()
+            installThrowingSettings("canvas")
+            _G.print = function() end
+            Settings:Register(wow_mock.fakeAddon(),
+                makeSchema({ slashCommands = { "/dctest" } }))
+            _G.print = nil
+            assert.equals("/dctest", _G["SLASH_TESTADDON1"])
+            assert.is_function(_G.SlashCmdList["TESTADDON"])
+        end)
+    end)
+
+    ---------------------------------------------------------------------------
+    -- :Register re-call -> Refresh (ADR-0003 re-register-as-refresh)
+    ---------------------------------------------------------------------------
+
+    describe(":Register re-call (ADR-0003)", function()
         it("does not call RegisterAddOnCategory a second time", function()
             local addon = wow_mock.fakeAddon()
             Settings:Register(addon, makeSchema())
@@ -503,14 +616,18 @@ describe("DragonCore.Settings", function()
             assert.equals("TestAddon Settings", mock:OpenedCategory().name)
         end)
 
-        it("calls InterfaceOptionsFrame_OpenToCategory on the legacy path", function()
-            mock:SetSettingsAPI(false)
-            local addon = wow_mock.fakeAddon()
-            Settings:Register(addon, makeSchema())
-            mock:ClearOpenedCategory()
-            Settings:Open(addon)
-            assert.is_table(mock:OpenedCategory())
-        end)
+        it("does not call Settings.OpenToCategory when the entry is failed",
+            function()
+                installThrowingSettings("canvas")
+                local addon = wow_mock.fakeAddon()
+                _G.print = function() end
+                Settings:Register(addon, makeSchema())
+                mock:ClearOpenedCategory()
+                _G.print = function() end
+                Settings:Open(addon)
+                _G.print = nil
+                assert.is_nil(mock:OpenedCategory())
+            end)
     end)
 
     ---------------------------------------------------------------------------
@@ -696,4 +813,544 @@ describe("DragonCore.Settings", function()
             assert.is_nil(_G["SLASH_TESTADDON1"])
         end)
     end)
+
+    ---------------------------------------------------------------------------
+    -- v0 widget contract (ADR-0003, 2026-05-13-dragoncore-v0-widget-contract)
+    --
+    -- The renderer materialises five faithful types (group, header, toggle,
+    -- slider, action) with real widgets, and four placeholder types
+    -- (select, input, color, description) as a "[deferred: <type>]" label
+    -- so consumers can ship full 9-type schemas before each deferred type
+    -- lands its real widget.
+    ---------------------------------------------------------------------------
+
+    -- Helper: locate the renderer handle for `addon` so per-widget specs can
+    -- reach into the nodes map. The handle is stored on the registry entry
+    -- inside Settings.lua; we access it via the same closures Settings.lua
+    -- uses. Because the registry is file-private we read through the public
+    -- side-effects (mock:Frames(), the mock's FontString records) wherever
+    -- possible, and only reach into the handle for re-pull assertions where
+    -- there is no other observation channel.
+    local function lastRegisteredHandle()
+        -- The Modern renderer's handle is stashed on the panel as a
+        -- closure-free reference: panel itself is not the handle, but
+        -- Settings.lua keeps the handle in its registry. We reach it by
+        -- re-invoking the renderer directly with a dedicated addon. For
+        -- tests that need the handle, register through Settings:Register
+        -- and then call this helper which queries the renderer module.
+        return rawget(_G, "__lastDragonCoreHandle")
+    end
+
+    -- Internal renderer probe: returns the handle the modern renderer
+    -- last produced. Implemented by spying on Renderer:Render via the
+    -- DragonCore module attach point.
+    local function installRenderSpy()
+        local renderer = DragonCore._SettingsRendererModern
+        local realRender = renderer.Render
+        renderer.Render = function(self, addon, schema)
+            local handle = realRender(self, addon, schema)
+            _G.__lastDragonCoreHandle = handle
+            return handle
+        end
+        return function()
+            renderer.Render = realRender
+            _G.__lastDragonCoreHandle = nil
+        end
+    end
+
+    describe("panel sizing (first-OnShow SetAllPoints)", function()
+        it("installs an OnShow script on the panel", function()
+            Settings:Register(wow_mock.fakeAddon(), makeSchema())
+            local cats = mock:RegisteredCategories()
+            local panel = cats[1].panel
+            assert.is_function(panel:GetScript("OnShow"))
+        end)
+
+        it("calls SetAllPoints on the panel parent the first time OnShow fires",
+            function()
+                Settings:Register(wow_mock.fakeAddon(), makeSchema())
+                local panel = mock:RegisteredCategories()[1].panel
+                local fakeParent = { _id = "Blizzard.Settings.ContentFrame" }
+                panel._parent = fakeParent
+                panel:GetScript("OnShow")(panel)
+                assert.equals(fakeParent, panel._allPointsOf)
+                assert.is_true(panel.__dragoncoreSized)
+            end)
+
+        it("does not re-call SetAllPoints on subsequent OnShow fires", function()
+            Settings:Register(wow_mock.fakeAddon(), makeSchema())
+            local panel = mock:RegisteredCategories()[1].panel
+            panel._parent = { _id = "Parent1" }
+            panel:GetScript("OnShow")(panel)
+            local firstParent = panel._allPointsOf
+            panel._parent = { _id = "Parent2" }
+            panel:GetScript("OnShow")(panel)
+            -- Sticky: the one-shot flag prevented a re-anchor against the
+            -- new parent. SetAllPoints was called exactly once.
+            assert.equals(firstParent, panel._allPointsOf)
+        end)
+
+        it("skips SetAllPoints when parent is still nil", function()
+            Settings:Register(wow_mock.fakeAddon(), makeSchema())
+            local panel = mock:RegisteredCategories()[1].panel
+            panel._parent = nil
+            panel:GetScript("OnShow")(panel)
+            assert.is_nil(panel._allPointsOf)
+            assert.is_nil(panel.__dragoncoreSized)
+        end)
+    end)
+
+    describe("header widget", function()
+        it("creates a FontString with the node label text", function()
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                root = {
+                    type = "group", label = "r",
+                    children = { { type = "header", label = "POC settings" } },
+                },
+            }))
+            -- The header's container frame is the second Frame created
+            -- (panel is first). Its FontString carries the label text.
+            local headerFrame
+            for f in mock:Frames() do
+                if f._fontStrings[1]
+                    and f._fontStrings[1]._text == "POC settings" then
+                    headerFrame = f
+                    break
+                end
+            end
+            assert.is_table(headerFrame)
+            assert.equals("POC settings", headerFrame._fontStrings[1]._text)
+            assert.equals("GameFontNormalLarge", headerFrame._fontStrings[1]._font)
+        end)
+
+        it("anchors the first child to the panel TOPLEFT", function()
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                root = {
+                    type = "group", label = "r",
+                    children = { { type = "header", label = "POC settings" } },
+                },
+            }))
+            local panel = mock:RegisteredCategories()[1].panel
+            local headerFrame
+            for f in mock:Frames() do
+                if f._fontStrings[1]
+                    and f._fontStrings[1]._text == "POC settings" then
+                    headerFrame = f
+                    break
+                end
+            end
+            local firstPoint = headerFrame._points[1]
+            assert.equals("TOPLEFT", firstPoint.point)
+            assert.equals(panel, firstPoint.relativeTo)
+        end)
+    end)
+
+    describe("placeholder widgets", function()
+        local function schemaWithPlaceholder(t)
+            local node
+            if t == "select" then
+                node = {
+                    type = "select", label = "S",
+                    options = { a = "A" },
+                    get = function() return "a" end,
+                    set = function() end,
+                }
+            elseif t == "input" then
+                node = {
+                    type = "input", label = "I",
+                    get = function() return "" end,
+                    set = function() end,
+                }
+            elseif t == "color" then
+                node = {
+                    type = "color", label = "C",
+                    get = function() return 1, 1, 1 end,
+                    set = function() end,
+                }
+            else
+                node = { type = "description", label = "D" }
+            end
+            return makeSchema({
+                root = {
+                    type = "group", label = "r",
+                    children = { node },
+                },
+            })
+        end
+
+        for _, ptype in ipairs({ "select", "input", "color", "description" }) do
+            it("renders a '[deferred: " .. ptype .. "]' FontString", function()
+                Settings:Register(wow_mock.fakeAddon(), schemaWithPlaceholder(ptype))
+                local found
+                for f in mock:Frames() do
+                    if f._fontStrings[1] then
+                        local text = f._fontStrings[1]._text or ""
+                        if text:find("[deferred: " .. ptype .. "]", 1, true) then
+                            found = text
+                        end
+                    end
+                end
+                assert.is_string(found)
+                assert.is_truthy(found:find(ptype, 1, true))
+            end)
+        end
+
+        it("does NOT invoke get for placeholder types", function()
+            local seen = 0
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                root = {
+                    type = "group", label = "r",
+                    children = {
+                        {
+                            type = "color", label = "c",
+                            get = function() seen = seen + 1; return 1, 1, 1 end,
+                            set = function() end,
+                        },
+                    },
+                },
+            }))
+            assert.equals(0, seen)
+        end)
+    end)
+
+    describe("toggle widget", function()
+        local function toggleSchema(getFn, setFn)
+            return makeSchema({
+                root = {
+                    type = "group", label = "r",
+                    children = {
+                        {
+                            type = "toggle", label = "Enable feature flag",
+                            get = getFn,
+                            set = setFn,
+                        },
+                    },
+                },
+            })
+        end
+
+        it("creates an unnamed CheckButton with the UICheckButtonTemplate", function()
+            Settings:Register(wow_mock.fakeAddon(),
+                toggleSchema(function() return true end, function() end))
+            local cb
+            for f in mock:Frames() do
+                if f._frameType == "CheckButton" then cb = f end
+            end
+            assert.is_table(cb)
+            assert.equals("UICheckButtonTemplate", cb._template)
+        end)
+
+        it("pulls the initial value via SecureCall and calls SetChecked", function()
+            local getCalls = 0
+            Settings:Register(wow_mock.fakeAddon(),
+                toggleSchema(function() getCalls = getCalls + 1; return true end,
+                             function() end))
+            assert.equals(1, getCalls)
+            local cb
+            for f in mock:Frames() do
+                if f._frameType == "CheckButton" then cb = f end
+            end
+            assert.is_true(cb:GetChecked())
+        end)
+
+        it("coerces non-boolean initial values to boolean for SetChecked",
+            function()
+                Settings:Register(wow_mock.fakeAddon(),
+                    toggleSchema(function() return nil end, function() end))
+                local cb
+                for f in mock:Frames() do
+                    if f._frameType == "CheckButton" then cb = f end
+                end
+                assert.is_false(cb:GetChecked())
+            end)
+
+        it("routes OnClick through SecureCall to node.set", function()
+            local setValue
+            Settings:Register(wow_mock.fakeAddon(),
+                toggleSchema(function() return false end,
+                             function(v) setValue = v end))
+            local cb
+            for f in mock:Frames() do
+                if f._frameType == "CheckButton" then cb = f end
+            end
+            cb._checked = true  -- simulate user click flipping the state
+            cb:GetScript("OnClick")(cb)
+            assert.is_true(setValue)
+        end)
+
+        it("attaches a label FontString with the node label", function()
+            Settings:Register(wow_mock.fakeAddon(),
+                toggleSchema(function() return true end, function() end))
+            local labelText
+            for f in mock:Frames() do
+                if f._frameType == "Frame" then
+                    for _, fs in ipairs(f._fontStrings) do
+                        if fs._text == "Enable feature flag" then
+                            labelText = fs._text
+                        end
+                    end
+                end
+            end
+            assert.equals("Enable feature flag", labelText)
+        end)
+    end)
+
+    describe("slider widget", function()
+        local function sliderSchema(getFn, setFn)
+            return makeSchema({
+                root = {
+                    type = "group", label = "r",
+                    children = {
+                        {
+                            type = "slider", label = "Login count",
+                            min = 0, max = 100, step = 1,
+                            get = getFn,
+                            set = setFn,
+                        },
+                    },
+                },
+            })
+        end
+
+        it("creates an unnamed Slider with OptionsSliderTemplate (Path A)",
+            function()
+                Settings:Register(wow_mock.fakeAddon(),
+                    sliderSchema(function() return 42 end, function() end))
+                local slider
+                for f in mock:Frames() do
+                    if f._frameType == "Slider" then slider = f end
+                end
+                assert.is_table(slider)
+                assert.equals("OptionsSliderTemplate", slider._template)
+            end)
+
+        it("sets min/max/step from node fields", function()
+            Settings:Register(wow_mock.fakeAddon(),
+                sliderSchema(function() return 0 end, function() end))
+            local slider
+            for f in mock:Frames() do
+                if f._frameType == "Slider" then slider = f end
+            end
+            assert.equals(0, slider._minValue)
+            assert.equals(100, slider._maxValue)
+            assert.equals(1, slider._valueStep)
+            assert.is_true(slider._obeyStepOnDrag)
+        end)
+
+        it("pulls the initial value through SecureCall and calls SetValue",
+            function()
+                local seen = 0
+                Settings:Register(wow_mock.fakeAddon(),
+                    sliderSchema(function() seen = seen + 1; return 42 end,
+                                 function() end))
+                assert.equals(1, seen)
+                local slider
+                for f in mock:Frames() do
+                    if f._frameType == "Slider" then slider = f end
+                end
+                assert.equals(42, slider:GetValue())
+            end)
+
+        it("falls back to node.min when get returns a non-number", function()
+            Settings:Register(wow_mock.fakeAddon(),
+                sliderSchema(function() return nil end, function() end))
+            local slider
+            for f in mock:Frames() do
+                if f._frameType == "Slider" then slider = f end
+            end
+            assert.equals(0, slider:GetValue())
+        end)
+
+        it("routes OnValueChanged through SecureCall to node.set", function()
+            local setValue
+            Settings:Register(wow_mock.fakeAddon(),
+                sliderSchema(function() return 0 end,
+                             function(v) setValue = v end))
+            local slider
+            for f in mock:Frames() do
+                if f._frameType == "Slider" then slider = f end
+            end
+            slider:GetScript("OnValueChanged")(slider, 73)
+            assert.equals(73, setValue)
+        end)
+
+        it("attaches a label FontString carrying node.label", function()
+            Settings:Register(wow_mock.fakeAddon(),
+                sliderSchema(function() return 0 end, function() end))
+            local labelFound = false
+            for f in mock:Frames() do
+                for _, fs in ipairs(f._fontStrings) do
+                    if fs._text == "Login count" then labelFound = true end
+                end
+            end
+            assert.is_true(labelFound)
+        end)
+    end)
+
+    describe("action widget", function()
+        local function actionSchema(runFn)
+            return makeSchema({
+                root = {
+                    type = "group", label = "r",
+                    children = {
+                        { type = "action", label = "Reset", run = runFn },
+                    },
+                },
+            })
+        end
+
+        it("creates an unnamed Button with UIPanelButtonTemplate", function()
+            Settings:Register(wow_mock.fakeAddon(), actionSchema(function() end))
+            local btn
+            for f in mock:Frames() do
+                if f._frameType == "Button" then btn = f end
+            end
+            assert.is_table(btn)
+            assert.equals("UIPanelButtonTemplate", btn._template)
+        end)
+
+        it("sets the button text from node.label", function()
+            Settings:Register(wow_mock.fakeAddon(), actionSchema(function() end))
+            local btn
+            for f in mock:Frames() do
+                if f._frameType == "Button" then btn = f end
+            end
+            assert.equals("Reset", btn._text)
+        end)
+
+        it("routes OnClick through SecureCall to node.run", function()
+            local runCalls = 0
+            Settings:Register(wow_mock.fakeAddon(),
+                actionSchema(function() runCalls = runCalls + 1 end))
+            local btn
+            for f in mock:Frames() do
+                if f._frameType == "Button" then btn = f end
+            end
+            btn:GetScript("OnClick")(btn)
+            assert.equals(1, runCalls)
+        end)
+    end)
+
+    describe(":Refresh re-pulls values in place (does not rebuild)", function()
+        it("re-pulls toggle get and updates SetChecked on the same widget",
+            function()
+                local current = false
+                local restore = installRenderSpy()
+                local addon = wow_mock.fakeAddon()
+                Settings:Register(addon, makeSchema({
+                    root = {
+                        type = "group", label = "r",
+                        children = {
+                            {
+                                type = "toggle", label = "t",
+                                get = function() return current end,
+                                set = function(v) current = v end,
+                            },
+                        },
+                    },
+                }))
+                local handle = lastRegisteredHandle()
+                local toggleEntry
+                for _, entry in pairs(handle.nodes) do
+                    if entry.type == "toggle" then toggleEntry = entry end
+                end
+                local checkButton = toggleEntry.checkButton
+                local framesBefore = mock:FrameCount()
+                assert.is_false(checkButton:GetChecked())
+
+                current = true
+                Settings:Refresh(addon)
+
+                assert.is_true(checkButton:GetChecked())
+                -- No new frames were created during Refresh (no rebuild).
+                assert.equals(framesBefore, mock:FrameCount())
+                restore()
+            end)
+
+        it("re-pulls slider get and updates SetValue on the same widget",
+            function()
+                local current = 0
+                local restore = installRenderSpy()
+                local addon = wow_mock.fakeAddon()
+                Settings:Register(addon, makeSchema({
+                    root = {
+                        type = "group", label = "r",
+                        children = {
+                            {
+                                type = "slider", label = "s",
+                                min = 0, max = 100, step = 1,
+                                get = function() return current end,
+                                set = function(v) current = v end,
+                            },
+                        },
+                    },
+                }))
+                local handle = lastRegisteredHandle()
+                local sliderEntry
+                for _, entry in pairs(handle.nodes) do
+                    if entry.type == "slider" then sliderEntry = entry end
+                end
+                local framesBefore = mock:FrameCount()
+                assert.equals(0, sliderEntry.slider:GetValue())
+
+                current = 64
+                Settings:Refresh(addon)
+
+                assert.equals(64, sliderEntry.slider:GetValue())
+                assert.equals(framesBefore, mock:FrameCount())
+                restore()
+            end)
+
+        it("is a no-op for action / header / placeholder entries", function()
+            local restore = installRenderSpy()
+            local actionRuns = 0
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                root = {
+                    type = "group", label = "r",
+                    children = {
+                        { type = "header", label = "h" },
+                        {
+                            type = "action", label = "a",
+                            run = function() actionRuns = actionRuns + 1 end,
+                        },
+                        {
+                            type = "color", label = "c",
+                            get = function() return 1, 1, 1 end,
+                            set = function() end,
+                        },
+                    },
+                },
+            }))
+            -- Action's run must NOT fire during Refresh.
+            Settings:Refresh(wow_mock.fakeAddon())
+            assert.equals(0, actionRuns)
+            restore()
+        end)
+    end)
+
+    describe("nodes map walk-order indexing", function()
+        it("assigns a depth-first preorder index covering every node", function()
+            local restore = installRenderSpy()
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                root = {
+                    type = "group", label = "root",
+                    children = {
+                        { type = "header", label = "H" },
+                        {
+                            type = "toggle", label = "T",
+                            get = function() return false end,
+                            set = function() end,
+                        },
+                    },
+                },
+            }))
+            local handle = lastRegisteredHandle()
+            -- 1: root group, 2: header, 3: toggle.
+            assert.equals("group", handle.nodes[1].type)
+            assert.equals("header", handle.nodes[2].type)
+            assert.equals("toggle", handle.nodes[3].type)
+            restore()
+        end)
+    end)
 end)
+

@@ -71,11 +71,34 @@ local function detect()
         and type(Enum.SendAddonMessageResult) == "table"
         and Enum.SendAddonMessageResult.AddOnMessageLockdown ~= nil
 
+    -- Modern Settings API (Patch 10.0.0+ engine). All currently-shipped
+    -- flavors -- Retail Mainline 10.0+, MoP Classic 5.5+, TBC Anniversary
+    -- 2.5.5+, Vanilla Classic 1.15+ -- run on the modern UI engine and
+    -- expose this namespace at runtime; the pre-10.0 InterfaceOptions
+    -- category API was removed in Patch 10.0.0 and is nil everywhere.
+    --
+    -- This flag detects *capability*, not *flavor*: it AND-s presence of
+    -- the three Settings functions the Modern renderer actually calls.
+    -- It does not gate on WOW_PROJECT_ID or interfaceVersion. The honest
+    -- meaning is "the calls the renderer will make resolve to functions"
+    -- -- mixin completeness on Classic flavors is a separate, runtime-only
+    -- concern handled by the pcall in Renderer_Modern:Render.
+    --
+    -- A frozen pre-10.0 Classic flavor would fail this probe; Settings:
+    -- Register fast-errors at our boundary with a clear precondition
+    -- message rather than crashing inside Blizzard code. That is the
+    -- intended failure mode.
+    local settingsAPI = type(_G.Settings) == "table"
+        and type(_G.Settings.RegisterCanvasLayoutCategory) == "function"
+        and type(_G.Settings.RegisterVerticalLayoutCategory) == "function"
+        and type(_G.Settings.RegisterAddOnCategory) == "function"
+
     return {
         cleuRestricted        = cleuRestricted or false,
         restrictedActions     = C_RestrictedActions ~= nil,
         frameEventCallback    = frameEventCallback or false,
         addonMessageLockdown  = addonMessageLockdown or false,
+        settingsAPI           = settingsAPI or false,
         projectMainline       = projectMainline or false,
         projectClassic        = projectClassic or false,
         buildNumber           = buildNumber or 0,
@@ -105,6 +128,9 @@ end
 ---@field restrictedActions boolean     C_RestrictedActions namespace is present.
 ---@field frameEventCallback boolean    Frame:RegisterEventCallback is available (retail).
 ---@field addonMessageLockdown boolean  Enum.SendAddonMessageResult.AddOnMessageLockdown is present.
+---@field settingsAPI boolean           Modern Settings API entry points
+---                                     (Register{Canvas,Vertical}LayoutCategory + RegisterAddOnCategory)
+---                                     are all callable.
 ---@field projectMainline boolean       WOW_PROJECT_ID == WOW_PROJECT_MAINLINE.
 ---@field projectClassic boolean        WOW_PROJECT_ID is any classic flavor (Era/TBC/Wrath/Cata/MoP).
 ---@field buildNumber number            Client build counter (e.g. 67235); 0 when unavailable.
