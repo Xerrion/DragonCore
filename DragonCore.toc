@@ -28,9 +28,8 @@ Core\AddonChannel\Serializer.lua
 Core\AddonChannel.lua
 Core\Store.lua
 
-# Settings stack (Renderers attach private namespaces; Settings.lua resolves both)
+# Settings stack (Renderer_Modern attaches a private namespace; Settings.lua precondition-gates on Capabilities.settingsAPI)
 Core\Settings\Renderer_Modern.lua
-Core\Settings\Renderer_Legacy.lua
 Core\Settings\Settings.lua
 
 # Orchestration root (Lifecycle last; bootstrap frame registers ADDON_LOADED / PLAYER_LOGIN / PLAYER_LOGOUT at load)

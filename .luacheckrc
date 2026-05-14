@@ -25,7 +25,7 @@ read_globals = {
     -- WoW API - Player identity (Store discriminators)
     "UnitName", "GetRealmName", "UnitFactionGroup", "UnitClass", "UnitRace",
 
-    -- WoW API - Settings panel (Renderer_Modern / Renderer_Legacy)
+    -- WoW API - Settings panel (Renderer_Modern)
     "Settings", "InterfaceOptions_AddCategory",
     "InterfaceOptionsFrame_OpenToCategory", "SlashCmdList",
 

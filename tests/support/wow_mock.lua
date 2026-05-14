@@ -11,9 +11,16 @@
 --                                               with :Cancel() / :IsCancelled()
 --   _G.CreateFrame(frameType, name?, parent?, template?)
 --                                            -- returns a FrameMock; ASSERTS
---                                               frameType == "Frame" and
---                                               name == nil per ADR section F
---                                               line 750 (taint contract).
+--                                               frameType in {Frame, CheckButton,
+--                                               Button, Slider} (widened per
+--                                               ADR-0003 v0 widget contract for
+--                                               Renderer_Modern) and name == nil
+--                                               per ADR-0003 taint contract
+--                                               (taint contract). The template
+--                                               string is recorded as
+--                                               frame._template so widget specs
+--                                               can assert which template was
+--                                               passed.
 --   _G.GetLocale()                           -- returns the mock's current
 --                                               locale (default "enUS"); set
 --                                               per-spec via :SetLocale.
@@ -121,8 +128,6 @@ function M.new()
     self._previousUnitClass = nil
     self._previousUnitRace = nil
     self._previousSettings = nil
-    self._previousInterfaceOptions_AddCategory = nil
-    self._previousInterfaceOptionsFrame_OpenToCategory = nil
     self._previousSlashCmdList = nil
     self._previousIsLoggedIn = nil
     self._previousIsAddOnLoaded = nil
@@ -178,12 +183,111 @@ end
 local FrameMock = {}
 FrameMock.__index = FrameMock
 
-local function newFrame()
+-------------------------------------------------------------------------------
+-- FontString mock (created via frame:CreateFontString). Records SetText calls
+-- so widget specs can assert on the rendered label text. The minimal surface
+-- mirrors what Renderer_Modern actually calls; specs that need more methods
+-- can extend it without changing the shape.
+-------------------------------------------------------------------------------
+
+local FontStringMock = {}
+FontStringMock.__index = FontStringMock
+
+local function newFontString(layer, font)
     return setmetatable({
+        _layer = layer,
+        _font = font,
+        _text = nil,
+        _points = {},
+        _textCalls = {},
+        _justifyH = nil,
+        _justifyV = nil,
+        _width = 0,
+        _color = nil,
+    }, FontStringMock)
+end
+
+function FontStringMock:SetText(text)
+    self._text = text
+    self._textCalls[#self._textCalls + 1] = text
+end
+
+function FontStringMock:GetText()
+    return self._text
+end
+
+function FontStringMock:SetTextColor(r, g, b, a)
+    self._color = { r, g, b, a }
+end
+
+function FontStringMock:SetPoint(point, relativeTo, relativePoint, x, y)
+    self._points[#self._points + 1] = {
+        point = point,
+        relativeTo = relativeTo,
+        relativePoint = relativePoint,
+        x = x,
+        y = y,
+    }
+end
+
+function FontStringMock:ClearAllPoints()
+    self._points = {}
+end
+
+function FontStringMock:SetJustifyH(j)
+    self._justifyH = j
+end
+
+function FontStringMock:SetJustifyV(j)
+    self._justifyV = j
+end
+
+function FontStringMock:SetWidth(w)
+    self._width = w
+end
+
+function FontStringMock:GetStringWidth()
+    return self._width
+end
+
+-------------------------------------------------------------------------------
+
+local function newFrame(frameType, parent, template)
+    return setmetatable({
+        _frameType = frameType or "Frame",
+        _parent = parent,
+        _template = template,
         _events = {},
         _unitEvents = {},
         _scripts = {},
+        _points = {},
+        _allPointsOf = nil,
+        _width = 0,
+        _height = 0,
+        _shown = true,
+        _enabled = true,
+        _mouseEnabled = true,
+        _checked = false,
+        _value = nil,
+        _minValue = nil,
+        _maxValue = nil,
+        _valueStep = nil,
+        _obeyStepOnDrag = nil,
+        _text = nil,
+        _strata = nil,
+        _level = nil,
+        _fontStrings = {},
+        _textures = {},
+        _calls = {},
     }, FrameMock)
+end
+
+-- Internal helper: record an invocation on the frame so specs that need to
+-- audit the exact call sequence (e.g. "SetAllPoints was called before
+-- Show") can read frame._calls. Per-method state setters above are the
+-- primary contract; this is a secondary trace channel.
+local function record(self, method, ...)
+    self._calls[#self._calls + 1] = { method = method, args = { ... } }
 end
 
 function FrameMock:RegisterEvent(event)
@@ -228,6 +332,185 @@ function FrameMock:GetScript(handler)
 end
 
 -------------------------------------------------------------------------------
+-- Geometry / visibility (widened for ADR-0003 v0 widget contract). Each
+-- setter records its arguments on the frame so widget specs can assert on
+-- size/anchor choices without re-implementing Blizzard's layout engine.
+-------------------------------------------------------------------------------
+
+function FrameMock:SetSize(w, h)
+    self._width = w
+    self._height = h
+    record(self, "SetSize", w, h)
+end
+
+function FrameMock:SetWidth(w)
+    self._width = w
+    record(self, "SetWidth", w)
+end
+
+function FrameMock:SetHeight(h)
+    self._height = h
+    record(self, "SetHeight", h)
+end
+
+function FrameMock:GetWidth()
+    return self._width or 0
+end
+
+function FrameMock:GetHeight()
+    return self._height or 0
+end
+
+function FrameMock:SetPoint(point, relativeTo, relativePoint, x, y)
+    self._points[#self._points + 1] = {
+        point = point,
+        relativeTo = relativeTo,
+        relativePoint = relativePoint,
+        x = x,
+        y = y,
+    }
+    record(self, "SetPoint", point, relativeTo, relativePoint, x, y)
+end
+
+function FrameMock:ClearAllPoints()
+    self._points = {}
+    record(self, "ClearAllPoints")
+end
+
+function FrameMock:GetPoint(index)
+    return self._points[index or 1]
+end
+
+function FrameMock:SetAllPoints(other)
+    self._allPointsOf = other or self._parent
+    record(self, "SetAllPoints", other)
+end
+
+function FrameMock:GetParent()
+    return self._parent
+end
+
+function FrameMock:SetParent(parent)
+    self._parent = parent
+    record(self, "SetParent", parent)
+end
+
+function FrameMock:Show()
+    self._shown = true
+    record(self, "Show")
+end
+
+function FrameMock:Hide()
+    self._shown = false
+    record(self, "Hide")
+end
+
+function FrameMock:IsShown()
+    return self._shown and true or false
+end
+
+function FrameMock:IsVisible()
+    return self._shown and true or false
+end
+
+function FrameMock:SetFrameStrata(strata)
+    self._strata = strata
+end
+
+function FrameMock:SetFrameLevel(level)
+    self._level = level
+end
+
+function FrameMock:EnableMouse(enabled)
+    self._mouseEnabled = enabled and true or false
+    record(self, "EnableMouse", enabled)
+end
+
+function FrameMock:Enable()
+    self._enabled = true
+    record(self, "Enable")
+end
+
+function FrameMock:Disable()
+    self._enabled = false
+    record(self, "Disable")
+end
+
+function FrameMock:IsEnabled()
+    return self._enabled and true or false
+end
+
+-------------------------------------------------------------------------------
+-- Widget value surface. CheckButton uses SetChecked/GetChecked; Slider uses
+-- SetValue/GetValue + SetMinMaxValues/SetValueStep; Button uses SetText.
+-------------------------------------------------------------------------------
+
+function FrameMock:SetChecked(checked)
+    self._checked = checked and true or false
+    record(self, "SetChecked", checked)
+end
+
+function FrameMock:GetChecked()
+    return self._checked and true or false
+end
+
+function FrameMock:SetValue(v)
+    self._value = v
+    record(self, "SetValue", v)
+end
+
+function FrameMock:GetValue()
+    return self._value
+end
+
+function FrameMock:SetMinMaxValues(minV, maxV)
+    self._minValue = minV
+    self._maxValue = maxV
+    record(self, "SetMinMaxValues", minV, maxV)
+end
+
+function FrameMock:SetValueStep(step)
+    self._valueStep = step
+    record(self, "SetValueStep", step)
+end
+
+function FrameMock:SetObeyStepOnDrag(b)
+    self._obeyStepOnDrag = b and true or false
+end
+
+function FrameMock:SetText(text)
+    self._text = text
+    record(self, "SetText", text)
+end
+
+function FrameMock:GetText()
+    return self._text
+end
+
+function FrameMock:CreateFontString(name, layer, font)
+    if name ~= nil then
+        error("FrameMock:CreateFontString: name must be nil (taint contract: "
+            .. "no named regions in DragonCore). Got " .. tostring(name), 2)
+    end
+    local fs = newFontString(layer, font)
+    self._fontStrings[#self._fontStrings + 1] = fs
+    return fs
+end
+
+function FrameMock:CreateTexture(name, layer)
+    if name ~= nil then
+        error("FrameMock:CreateTexture: name must be nil (taint contract: "
+            .. "no named regions in DragonCore). Got " .. tostring(name), 2)
+    end
+    local tex = { _layer = layer, _texture = nil }
+    function tex.SetTexture(t, path) t._texture = path end
+    function tex.SetPoint() end
+    function tex.SetAllPoints() end
+    self._textures[#self._textures + 1] = tex
+    return tex
+end
+
+-------------------------------------------------------------------------------
 -- Install / Uninstall
 -------------------------------------------------------------------------------
 
@@ -248,8 +531,6 @@ function Mock:Install()
     self._previousUnitClass = _G.UnitClass
     self._previousUnitRace = _G.UnitRace
     self._previousSettings = _G.Settings
-    self._previousInterfaceOptions_AddCategory = _G.InterfaceOptions_AddCategory
-    self._previousInterfaceOptionsFrame_OpenToCategory = _G.InterfaceOptionsFrame_OpenToCategory
     self._previousSlashCmdList = _G.SlashCmdList
     self._previousIsLoggedIn = _G.IsLoggedIn
     self._previousIsAddOnLoaded = _G.IsAddOnLoaded
@@ -292,18 +573,24 @@ function Mock:Install()
     }
 
     _G.CreateFrame = function(frameType, name, parent, template)
-        -- Taint contract proxy assertions (ADR section F line 750).
-        if frameType ~= "Frame" then
+        -- Taint contract proxy assertions (ADR-0003 v0 widget contract).
+        -- Allow-list widened for ADR-0003 (v0 widget contract): the modern
+        -- renderer composes CheckButton / Slider / Button widgets in
+        -- addition to plain container Frames. Every other frameType still
+        -- raises -- the v0 surface does not need EditBox, ScrollFrame, etc.
+        if frameType ~= "Frame"
+            and frameType ~= "CheckButton"
+            and frameType ~= "Button"
+            and frameType ~= "Slider" then
             error("CreateFrame mock: unsupported frameType " ..
-                tostring(frameType) .. " (v0 scope: 'Frame' only)", 2)
+                tostring(frameType) .. " (v0 scope: Frame|CheckButton|"
+                .. "Button|Slider only)", 2)
         end
         if name ~= nil then
             error("CreateFrame mock: name must be nil (taint contract: no " ..
                 "named frames in DragonCore). Got " .. tostring(name), 2)
         end
-        local frame = newFrame()
-        frame._parent = parent
-        frame._template = template
+        local frame = newFrame(frameType, parent, template)
         table.insert(mock.frames, frame)
         return frame
     end
@@ -360,10 +647,11 @@ function Mock:Install()
         return r[1], r[2], r[3]
     end
 
-    -- Settings panel surface (design note section 7.1). Both the modern
-    -- _G.Settings table and the legacy InterfaceOptions_* entry points are
-    -- installed by default; specs that need to gate the renderer-flavor
-    -- switch call Mock:SetSettingsAPI(false) to remove _G.Settings.
+    -- Settings panel surface (design note section 7.1, ADR-0002). Only
+    -- the modern _G.Settings table is installed; ADR-0002 removed the
+    -- legacy InterfaceOptions_* path. Specs that need to drive the
+    -- precondition-error branch call useStubbedSettingsAPI() in the spec
+    -- to nil _G.Settings before reloading Capabilities.
     _G.Settings = {
         RegisterAddOnCategory = function(panel, name)
             local category = { _category = true, panel = panel, name = name }
@@ -389,17 +677,6 @@ function Mock:Install()
             mock._openedCategory = category
         end,
     }
-    _G.InterfaceOptions_AddCategory = function(panel)
-        table.insert(mock._registeredCategories, {
-            api = "InterfaceOptions_AddCategory",
-            panel = panel,
-            name = panel and panel.name or nil,
-            category = panel,
-        })
-    end
-    _G.InterfaceOptionsFrame_OpenToCategory = function(category)
-        mock._openedCategory = category
-    end
     _G.SlashCmdList = {}
 
     -- Lifecycle bootstrap surface (design note section 8.1). IsLoggedIn /
@@ -437,8 +714,6 @@ function Mock:Uninstall()
     _G.UnitClass = self._previousUnitClass
     _G.UnitRace = self._previousUnitRace
     _G.Settings = self._previousSettings
-    _G.InterfaceOptions_AddCategory = self._previousInterfaceOptions_AddCategory
-    _G.InterfaceOptionsFrame_OpenToCategory = self._previousInterfaceOptionsFrame_OpenToCategory
     _G.SlashCmdList = self._previousSlashCmdList
     _G.IsLoggedIn = self._previousIsLoggedIn
     _G.IsAddOnLoaded = self._previousIsAddOnLoaded
@@ -463,8 +738,6 @@ function Mock:Uninstall()
     self._previousUnitClass = nil
     self._previousUnitRace = nil
     self._previousSettings = nil
-    self._previousInterfaceOptions_AddCategory = nil
-    self._previousInterfaceOptionsFrame_OpenToCategory = nil
     self._previousSlashCmdList = nil
     self._previousIsLoggedIn = nil
     self._previousIsAddOnLoaded = nil
@@ -608,9 +881,8 @@ end
 
 ---Return a shallow copy of every recorded category registration. Each entry
 ---is `{ api, panel, name, category }` where `api` discriminates between
----`Settings.RegisterAddOnCategory`,
----`Settings.RegisterCanvasLayoutCategory`, and
----`InterfaceOptions_AddCategory`.
+---`Settings.RegisterAddOnCategory` and
+---`Settings.RegisterCanvasLayoutCategory`.
 ---@return table[]
 function Mock:RegisteredCategories()
     local out = {}
@@ -620,8 +892,7 @@ function Mock:RegisteredCategories()
     return out
 end
 
----Return the last category handle passed to either
----`Settings.OpenToCategory` or `InterfaceOptionsFrame_OpenToCategory`, or
+---Return the last category handle passed to `Settings.OpenToCategory`, or
 ---nil if no panel has been opened.
 ---@return table|nil
 function Mock:OpenedCategory()
@@ -652,10 +923,9 @@ function Mock:SlashCommand(slashKey, msg)
 end
 
 ---Toggle the presence of `_G.Settings` (the modern API). `true` restores the
----stub installed by :Install; `false` nils `_G.Settings` so Settings.lua's
----`pickRenderer` falls through to `Renderer_Legacy`. The legacy
----`InterfaceOptions_AddCategory` is left in place regardless -- both
----codepaths can coexist.
+---stub installed by :Install; `false` nils `_G.Settings` so the Capabilities
+---probe evaluates false and `Settings:Register` fast-errors at the
+---precondition gate (ADR-0002).
 ---@param present boolean
 function Mock:SetSettingsAPI(present)
     if present then
