@@ -151,6 +151,21 @@ local function validateSchemaShape(schema)
             end
         end
     end
+    if schema.slashHandlers ~= nil then
+        if type(schema.slashHandlers) ~= "table" then
+            error("DragonCore.Settings:Register: slashHandlers must be a table", 3)
+        end
+        for key, handler in pairs(schema.slashHandlers) do
+            if type(key) ~= "string" then
+                error("DragonCore.Settings:Register: slashHandlers keys must be " ..
+                    "strings, got " .. type(key), 3)
+            end
+            if type(handler) ~= "function" then
+                error("DragonCore.Settings:Register: slashHandlers[" .. key ..
+                    "] must be a function", 3)
+            end
+        end
+    end
 end
 
 -- Internal helper: append per-node validation errors to `errors` keyed by a
@@ -315,6 +330,12 @@ local function handleSlashCommand(addon, msg)
         return
     end
 
+    local handlers = entry.schema.slashHandlers
+    if type(handlers) == "table" and type(handlers[verb]) == "function" then
+        handlers[verb](addon, msg, verb)
+        return
+    end
+
     -- Unknown verb: print a help message resolved through Locale chrome.
     -- Fallback path returns the key itself when Locales/enUS.lua has not
     -- registered chrome strings (degraded harness), so the message is
@@ -361,6 +382,34 @@ function Settings:Register(addon, schema)
     local errors = validateSchemaContent(schema)
     if #errors > 0 then
         return { ok = false, errors = errors }
+    end
+
+    if schema.slashHandlers ~= nil then
+        -- Fail Fast: detect keys that would collide after case normalization
+        local seen = {}
+        for k in pairs(schema.slashHandlers) do
+            local lowered = k:lower()
+            if seen[lowered] then
+                error("DragonCore.Settings:Register: slashHandlers keys '"
+                    .. seen[lowered] .. "' and '" .. k
+                    .. "' have the same key after case normalization", 3)
+            end
+            seen[lowered] = k
+        end
+
+        -- Normalize all keys to lowercase for case-insensitive matching.
+        -- Two-pass: collect first, then mutate, to avoid adding keys during
+        -- pairs iteration (undefined in Lua 5.1).
+        local toLower = {}
+        for k in pairs(schema.slashHandlers) do
+            if k ~= k:lower() then
+                toLower[#toLower + 1] = k
+            end
+        end
+        for _, k in ipairs(toLower) do
+            schema.slashHandlers[k:lower()] = schema.slashHandlers[k]
+            schema.slashHandlers[k] = nil
+        end
     end
 
     local existing = registry[addon.name]

@@ -186,6 +186,52 @@ describe("DragonCore.Settings", function()
             assert.is_truthy(err2:find(
                 "schema.slashCommands[1] must be a '/'-prefixed string", 1, true))
         end)
+
+        it("raises when slashHandlers is not a table", function()
+            local ok, err = pcall(function()
+                Settings:Register(wow_mock.fakeAddon(), makeSchema({ slashHandlers = "bad" }))
+            end)
+            assert.is_false(ok)
+            assert.is_truthy(err:find("slashHandlers must be a table", 1, true))
+        end)
+
+        it("raises when slashHandlers has a non-string key", function()
+            local ok, err = pcall(function()
+                Settings:Register(wow_mock.fakeAddon(), makeSchema({ slashHandlers = { [42] = function() end } }))
+            end)
+            assert.is_false(ok)
+            assert.is_truthy(err:find("slashHandlers keys must be strings", 1, true))
+        end)
+
+        it("raises when slashHandlers value is not a function", function()
+            local ok, err = pcall(function()
+                Settings:Register(wow_mock.fakeAddon(), makeSchema({ slashHandlers = { toggle = "notafunc" } }))
+            end)
+            assert.is_false(ok)
+            assert.is_truthy(err:find("must be a function", 1, true))
+        end)
+
+        it("raises when slashHandlers keys collide after case normalization", function()
+            local ok, err = pcall(Settings.Register, Settings, wow_mock.fakeAddon(), makeSchema({
+                slashHandlers = {
+                    toggle = function() end,
+                    Toggle = function() end,
+                },
+            }))
+            assert.is_false(ok)
+            assert.is_truthy(err:find("have the same key after case normalization", 1, true))
+        end)
+
+        it("raises when both colliding keys are non-lowercase", function()
+            local ok, err = pcall(Settings.Register, Settings, wow_mock.fakeAddon(), makeSchema({
+                slashHandlers = {
+                    FOO = function() end,
+                    fOO = function() end,
+                },
+            }))
+            assert.is_false(ok)
+            assert.is_truthy(err:find("have the same key after case normalization", 1, true))
+        end)
     end)
 
     ---------------------------------------------------------------------------
@@ -811,6 +857,106 @@ describe("DragonCore.Settings", function()
             Settings:Register(wow_mock.fakeAddon(), makeSchema())
             assert.is_nil(_G.SlashCmdList["TESTADDON"])
             assert.is_nil(_G["SLASH_TESTADDON1"])
+        end)
+
+        it("calls a custom slashHandler for a matching verb", function()
+            local called = false
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                slashCommands = { "/dctest" },
+                slashHandlers = {
+                    toggle = function() called = true end,
+                },
+            }))
+            mock:SlashCommand("TESTADDON", "toggle")
+            assert.is_true(called)
+        end)
+
+        it("passes addon, msg, and verb to the custom handler", function()
+            local captured = {}
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                slashCommands = { "/dctest" },
+                slashHandlers = {
+                    toggle = function(addon, msg, verb)
+                        captured.addon = addon
+                        captured.msg = msg
+                        captured.verb = verb
+                    end,
+                },
+            }))
+            mock:SlashCommand("TESTADDON", "toggle on")
+            assert.equals("TestAddon", captured.addon.name)
+            assert.equals("toggle on", captured.msg)
+            assert.equals("toggle", captured.verb)
+        end)
+
+        it("built-in verbs still work when slashHandlers is present", function()
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                slashCommands = { "/dctest" },
+                slashHandlers = {
+                    toggle = function() end,
+                },
+            }))
+            mock:ClearOpenedCategory()
+            mock:SlashCommand("TESTADDON", "open")
+            assert.is_table(mock:OpenedCategory())
+
+            local resetValue
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                slashCommands = { "/dctest" },
+                slashHandlers = {
+                    toggle = function() end,
+                },
+                root = {
+                    type = "group", label = "r",
+                    children = {
+                        {
+                            type = "toggle", label = "a", default = true,
+                            get = function() return false end,
+                            set = function(v) resetValue = v end,
+                        },
+                    },
+                },
+            }))
+            mock:SlashCommand("TESTADDON", "reset")
+            assert.equals(true, resetValue)
+        end)
+
+        it("unknown verb still prints help when slashHandlers present", function()
+            local printed
+            _G.print = function(s) printed = s end
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                slashCommands = { "/dctest" },
+                slashHandlers = {
+                    toggle = function() end,
+                },
+            }))
+            mock:SlashCommand("TESTADDON", "garble")
+            _G.print = nil
+            assert.is_string(printed)
+            assert.is_truthy(printed:find("garble", 1, true))
+        end)
+
+        it("works without slashHandlers in the schema", function()
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                slashCommands = { "/dctest" },
+            }))
+            mock:ClearOpenedCategory()
+            mock:SlashCommand("TESTADDON", "open")
+            assert.is_table(mock:OpenedCategory())
+        end)
+
+        it("resolves custom handlers case-insensitively after normalization", function()
+            local called
+            Settings:Register(wow_mock.fakeAddon(), makeSchema({
+                slashCommands = { "/dctest" },
+                slashHandlers = { Toggle = function() called = true end },
+            }))
+            mock:SlashCommand("TESTADDON", "toggle")
+            assert.is_true(called)
+
+            called = false
+            mock:SlashCommand("TESTADDON", "TOGGLE")
+            assert.is_true(called)
         end)
     end)
 
